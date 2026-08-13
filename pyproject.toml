@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-airlock"
-version = "0.3.0"
+version = "0.4.0"
 description = "The safety layer between your AI agent and the real world."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,7 +24,17 @@ dependencies = ["pydantic>=2.13.4"]
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary,pool]>=3.3.4"]
-dev = ["pytest>=9.1.1", "pytest-cov>=7.1.0", "ruff>=0.16.2", "mypy>=2.3.0"]
+prometheus = ["prometheus-client>=0.20"]
+otel = ["opentelemetry-api>=1.25"]
+dev = [
+  "pytest>=9.1.1",
+  "pytest-cov>=7.1.0",
+  "ruff>=0.16.2",
+  "mypy>=2.3.0",
+  "prometheus-client>=0.20",
+  "opentelemetry-api>=1.25",
+  "opentelemetry-sdk>=1.25",
+]
 
 [project.scripts]
 airlock = "airlock.cli:main"

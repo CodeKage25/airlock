@@ -14,6 +14,7 @@ from airlock.core.pipeline import Runtime
 from airlock.core.policy import Policy
 from airlock.core.shadow import Mode, Shadow
 from airlock.core.stores import Store, from_url
+from airlock.core.telemetry import Snapshot, Telemetry, resolve
 from airlock.core.tools import Registry, Tool
 from airlock.core.types import ApprovalRecord
 from airlock.errors import PolicyError
@@ -37,6 +38,7 @@ class Airlock:
         approval_ttl: timedelta | None = None,
         stuck_after: timedelta = DEFAULT_STUCK_AFTER,
         mode: Mode | str = Mode.ENFORCE,
+        telemetry: Telemetry | Sequence[Telemetry] | None = None,
     ) -> None:
         if fail_mode != "closed":
             raise PolicyError("fail_mode is always 'closed'; there is no fail-open mode")
@@ -45,7 +47,8 @@ class Airlock:
         self.policy = policy or Policy()
         self.store: Store = from_url(store) if isinstance(store, str) else store
         self.clock = clock or _utcnow
-        self.audit = AuditLog(self.store, self.clock, audit_redact)
+        self.telemetry = resolve(telemetry)
+        self.audit = AuditLog(self.store, self.clock, audit_redact, self.telemetry)
         self.approvals = Approvals(
             self.store, self.clock, self._run_approved, self.audit, approval_ttl
         )
@@ -62,6 +65,7 @@ class Airlock:
             strict_idempotency=strict_idempotency,
             approval_ttl=approval_ttl,
             mode=self.mode,
+            telemetry=self.telemetry,
         )
 
     def tool(
@@ -158,6 +162,25 @@ class Airlock:
             actor=actor,
             bypass_approval=True,
             key_override=record.key,
+        )
+
+    def snapshot(self) -> Snapshot:
+        """Queue and stuck-intent state, read on demand.
+
+        These are the two things worth paging on and neither can be counted as it
+        happens: a request ages while nothing occurs, and an intent becomes stuck by a
+        process going away. Both have to be looked up.
+        """
+        now = self.clock()
+        pending = self.approvals.pending()
+        stuck = self.intents.stuck()
+        return Snapshot(
+            pending_approvals=len(pending),
+            oldest_pending_seconds=max(
+                ((now - r.created_at).total_seconds() for r in pending), default=0.0
+            ),
+            stuck_intents=len(stuck),
+            oldest_stuck_seconds=max((item.age.total_seconds() for item in stuck), default=0.0),
         )
 
     def close(self) -> None:

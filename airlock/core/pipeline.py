@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,6 +17,7 @@ from airlock.core.canonical import digest
 from airlock.core.policy import Policy
 from airlock.core.shadow import Mode
 from airlock.core.stores.base import Store
+from airlock.core.telemetry import NullTelemetry, Telemetry
 from airlock.core.tools import Tool
 from airlock.core.types import Call, Decision, Outcome, Reservation, ReservationState, Verdict
 from airlock.errors import (
@@ -55,6 +57,7 @@ class Runtime:
     strict_idempotency: bool = False
     approval_ttl: timedelta | None = None
     mode: Mode = Mode.ENFORCE
+    telemetry: Telemetry = field(default_factory=NullTelemetry)
 
 
 def run(
@@ -70,6 +73,27 @@ def run(
     key_override: str | None = None,
 ) -> Any:
     """Take a proposed action through every layer. Nothing else may call the tool."""
+    started = time.perf_counter()
+    try:
+        with rt.telemetry.span(tool.name, intent):
+            return _dispatch(
+                rt, tool, args, kwargs, intent, context, actor, bypass_approval, key_override
+            )
+    finally:
+        rt.telemetry.duration(tool.name, time.perf_counter() - started)
+
+
+def _dispatch(
+    rt: Runtime,
+    tool: Tool,
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any] | None,
+    intent: str,
+    context: Mapping[str, Any] | None,
+    actor: str | None,
+    bypass_approval: bool,
+    key_override: str | None,
+) -> Any:
     try:
         return _run(
             rt,

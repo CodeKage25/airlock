@@ -15,7 +15,7 @@ from airlock.errors import (
 )
 from airlock.lock import Airlock
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "Airlock",

@@ -7,6 +7,7 @@ from typing import Any
 
 from airlock.core.canonical import canonical
 from airlock.core.stores.base import Store
+from airlock.core.telemetry import DecisionEvent, NullTelemetry, Telemetry
 from airlock.core.types import AuditEntry, Outcome
 
 REDACTED = "***"
@@ -20,10 +21,12 @@ class AuditLog:
         store: Store,
         clock: Callable[[], datetime],
         redact: Iterable[str] = (),
+        telemetry: Telemetry | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._redact = frozenset(redact)
+        self._telemetry = telemetry or NullTelemetry()
 
     def record(
         self,
@@ -53,7 +56,21 @@ class AuditLog:
             result_ref=result_ref,
             actor=actor,
         )
+        # The record is written first. If the store refuses, the action does not run,
+        # and no metric should claim otherwise.
         self._store.append_audit(entry)
+        if outcome is not Outcome.PROPOSED:
+            self._telemetry.decision(
+                DecisionEvent(
+                    tool=tool,
+                    outcome=outcome,
+                    intent=intent,
+                    layer=layer,
+                    scope=scope,
+                    reason=reason,
+                    actor=actor,
+                )
+            )
         return entry
 
     def redacted(self, args: Mapping[str, Any]) -> dict[str, Any]:

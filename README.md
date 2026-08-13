@@ -188,6 +188,7 @@ Airlock(
     approval_ttl: timedelta | None = None,   # default deadline for parked requests
     stuck_after: timedelta = timedelta(minutes=5),   # when a pending call counts as stuck
     mode: str = "enforce",            # "shadow" evaluates and records without blocking
+    telemetry: Telemetry | Sequence[Telemetry] | None = None,
 )
 ```
 
@@ -203,6 +204,7 @@ Airlock(
 | `lock.intents.stuck()` | Intents whose real-world effect is unknown and are blocking retries |
 | `lock.intents.resolve(...)` | Settle one, as executed or not executed |
 | `lock.shadow.report()` | In observe-only mode, what enforcing would have changed |
+| `lock.snapshot()` | Pending approvals and stuck intents, for alerting |
 | `lock.check_policy()` | Raise if a cap or rule names a tool that was never registered |
 
 ### `Policy` and `Caps`
@@ -340,6 +342,44 @@ Spend is still ledgered for calls shadow mode allows through, because they reall
 the money and a window that pretended otherwise would under-report every breach after it.
 
 ## Operating it
+
+### Metrics and traces
+
+```bash
+pip install 'agent-airlock[prometheus,otel]'
+```
+
+```python
+from airlock.telemetry.prometheus import PrometheusTelemetry
+from airlock.telemetry.otel import OpenTelemetry
+
+metrics = PrometheusTelemetry()
+lock = Airlock(policy=policy, store=..., telemetry=[metrics, OpenTelemetry()])
+metrics.watch(lock)  # the gauges that have to be read rather than counted
+```
+
+```
+airlock_decisions_total{tool="send_payment",outcome="executed",layer="none"}   3.0
+airlock_decisions_total{tool="send_payment",outcome="blocked",layer="caps"}    2.0
+airlock_decisions_total{tool="send_payment",outcome="escalated",layer="approvals"} 1.0
+airlock_pipeline_seconds_bucket{tool="send_payment",le="0.001"}                6.0
+airlock_pending_approvals                                                      1.0
+airlock_oldest_pending_approval_seconds                                     1830.0
+airlock_stuck_intents                                                          0.0
+```
+
+OpenTelemetry puts one span on every proposed action carrying the verdict, the deciding
+layer and the reason, and marks refusals as errors. The point is to sit the guardrail
+decision next to the agent turn that caused it, so "why did this payment not happen" is
+answerable from the same trace as "what was the model doing".
+
+Telemetry hangs off the audit writer, which is the one place every outcome already flows
+through, so a counter cannot drift out of step with the audit trail.
+
+**The audit log fails closed; telemetry fails open.** A call that cannot be audited does not
+execute, because the audit log is the compliance record. A metrics backend having a bad day
+costs a point on a dashboard, so every telemetry call is wrapped and its exceptions are
+swallowed — including per-backend, so one broken exporter cannot silence another.
 
 ### Deploying more than one replica
 
@@ -487,8 +527,6 @@ adversarial benchmark. `mypy` is strict over `core/`.
 - **Sync only.** Tools and risk hooks are synchronous. Async support is next.
 - **Policy is Python.** No YAML policy files yet, so a policy change is a deploy and cannot
   be reviewed by anyone who does not write Python.
-- **No metrics.** Everything is queryable from the audit log, but there is no OpenTelemetry
-  or Prometheus output yet.
 - **Audit and spend grow forever.** No retention, rollup or archival yet.
 - **`TRUNCATE` protection needs role separation.** The triggers stop the application from
   rewriting history; they do not stop the table's owner from dropping the triggers. Grant
@@ -575,8 +613,9 @@ Python 3.11+. Core dependencies: pydantic and the standard library. Postgres, re
 - [x] **v0.2** Postgres store, schema migrations, stuck-intent recovery, approval TTLs,
       operator CLI
 - [x] **v0.3** shadow mode with a graduation path per tool
-- [ ] **v0.4** OpenTelemetry and Prometheus, async tools, agent identity, policy as data
-- [ ] **v0.5** MCP server, LangChain/LangGraph adapter, Slack approval channel
+- [x] **v0.4** OpenTelemetry and Prometheus
+- [ ] **v0.5** async tools, agent identity, policy as data
+- [ ] **v0.6** MCP server, LangChain/LangGraph adapter, Slack approval channel
 - [ ] **Later** hash-chained audit, audit export and retention, anomaly-detection risk hook
 
 Full detail and reasoning: [`ROADMAP.md`](ROADMAP.md).

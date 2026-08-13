@@ -14,8 +14,22 @@ whoever chose the library.
 | **Cap saturation** | `blocked` with `layer=caps` rising | Either a runaway agent or a limit that no longer matches the business. Look at which before changing anything. |
 | **Block rate by layer** | `blocked` grouped by `layer` | A sudden shift in *which* layer is refusing usually means an upstream change, not an agent change. |
 
-There are no built-in metrics yet; these come from `lock.audit.query(...)`. OpenTelemetry and
-Prometheus are the next track on the [roadmap](ROADMAP.md).
+Every row above has a metric. Install `agent-airlock[prometheus]`, pass
+`telemetry=PrometheusTelemetry()` and call `metrics.watch(lock)`:
+
+| Alert on | Metric |
+|---|---|
+| Stuck intents | `airlock_stuck_intents > 0` |
+| A stuck intent nobody has picked up | `airlock_oldest_stuck_intent_seconds > 900` |
+| Store outage | `rate(airlock_decisions_total{layer="fail-closed"}[5m]) > 0` |
+| Approval queue rotting | `airlock_oldest_pending_approval_seconds > 3600` |
+| Decisions nobody made | `rate(airlock_decisions_total{outcome="expired"}[1h]) > 0` |
+| Cap saturation | `rate(airlock_decisions_total{layer="caps",outcome="blocked"}[5m])` |
+| Guardrail latency | `histogram_quantile(0.95, airlock_pipeline_seconds_bucket)` |
+
+The two gauges are collected when Prometheus scrapes, because a request ages while nothing
+happens and an intent becomes stuck by a process disappearing, so neither can be counted as
+it occurs. A failing scrape yields no gauges rather than taking the process down.
 
 ## Incident: a stuck intent
 

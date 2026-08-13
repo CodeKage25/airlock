@@ -72,7 +72,7 @@ it *would* have stopped, tune the policy, then enforce.
 - A diff report: what shadow mode would have blocked, grouped by layer and reason
 - Per-tool graduation, so `send_payment` can enforce while `issue_refund` still observes
 
-### 6. Observability
+### 6. Observability  ✅ shipped in v0.4
 
 Companies do not run components they cannot see.
 
@@ -181,7 +181,7 @@ The real differentiator in regulated industries.
 
 1. ~~**P0** — it can be deployed~~ ✅ v0.2
 2. **P2 trust surface** — cheap, and it is what an evaluator sees first
-3. ~~**Shadow mode**~~ ✅ v0.3, and observability — it can be adopted without a scary cutover
+3. ~~**Shadow mode and observability**~~ ✅ v0.3 and v0.4
 4. **Async, MCP, identity** — it can be adopted by more than Python shops
 5. **Compliance and hardening** — it can be adopted by the industries that need it most
 

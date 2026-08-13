@@ -9,6 +9,36 @@ affects.
 
 ## [Unreleased]
 
+## [0.4.0]
+
+Runnable by people who did not write it.
+
+### Added
+
+- **Prometheus metrics.** `pip install 'agent-airlock[prometheus]'`, then
+  `telemetry=PrometheusTelemetry()`. Emits `airlock_decisions_total{tool,outcome,layer}`
+  and an `airlock_pipeline_seconds` histogram. `metrics.watch(lock)` adds
+  `airlock_pending_approvals`, `airlock_oldest_pending_approval_seconds`,
+  `airlock_stuck_intents` and `airlock_oldest_stuck_intent_seconds`, collected at scrape
+  time because a request ages while nothing happens and an intent becomes stuck by a
+  process disappearing, so neither can be counted as it occurs.
+- **OpenTelemetry traces.** `pip install 'agent-airlock[otel]'`, then
+  `telemetry=OpenTelemetry()`. One span per proposed action carrying the outcome, the
+  deciding layer and the reason, with refusals marked as errors.
+- `lock.snapshot()` for the same queue and stuck-intent state without a metrics backend.
+- `Airlock(telemetry=...)` accepts one backend or a list. Every alert in the operations
+  runbook now has a query next to it.
+
+### Notes on design
+
+- **The audit log fails closed; telemetry fails open.** A call that cannot be audited does
+  not execute, because the audit log is the compliance record. A metrics backend having a
+  bad day costs a point on a dashboard, so every telemetry call is wrapped and its
+  exceptions swallowed. Backends are guarded individually, so one broken exporter cannot
+  silence another.
+- Telemetry hangs off the audit writer, the one place every outcome already flows through,
+  so a counter cannot drift out of step with the audit trail.
+
 ## [0.3.0]
 
 Adoptable without a big-bang cutover.
@@ -121,7 +151,8 @@ First release. The five layers, and the promises they make.
 - **A 31-case adversarial benchmark** with two hard invariants: zero duplicate executions and
   zero fail-closed violations.
 
-[Unreleased]: https://github.com/CodeKage25/airlock/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/CodeKage25/airlock/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/CodeKage25/airlock/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/CodeKage25/airlock/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/CodeKage25/airlock/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CodeKage25/airlock/releases/tag/v0.1.0
