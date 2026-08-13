@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+        with:
+          # Turns Pages on if it is not already, so the first push deploys rather than
+          # failing with a 404 that looks like a broken workflow.
+          enablement: true
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
