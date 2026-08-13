@@ -1,0 +1,10 @@
+# Staged from the repo root by .github/workflows/docs.yml at build time.
+# The root copies are canonical; these are generated so the two cannot drift.
+index.md
+BENCHMARK.md
+ROADMAP.md
+SECURITY.md
+CONTRIBUTING.md
+CHANGELOG.md
+CLAUDE.md
+CODE_OF_CONDUCT.md

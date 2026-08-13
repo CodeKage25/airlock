@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/CodeKage25/airlock/security/advisories/new
+    about: A bypass affecting a deployed system. Private, please, not a public issue.
+  - name: Questions and design discussion
+    url: https://github.com/CodeKage25/airlock/discussions
+    about: How to model a policy, whether an approach fits, what should be built next.

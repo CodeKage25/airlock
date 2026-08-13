@@ -1,0 +1,47 @@
+site_name: Airlock
+site_description: The safety layer between your AI agent and the real world.
+site_url: https://codekage25.github.io/airlock/
+repo_url: https://github.com/CodeKage25/airlock
+repo_name: CodeKage25/airlock
+edit_uri: edit/main/docs/
+
+# Root-level markdown is the canonical copy and is staged into docs/ by the docs
+# workflow, so the site and the repo cannot drift apart.
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: { icon: material/weather-sunny, name: Light mode }
+
+nav:
+  - Home: index.md
+  - Operations runbook: runbook.md
+  - Benchmark: BENCHMARK.md
+  - Roadmap: ROADMAP.md
+  - Security: SECURITY.md
+  - Contributing: CONTRIBUTING.md
+  - Engineering conventions: CLAUDE.md
+  - Code of conduct: CODE_OF_CONDUCT.md
+  - Changelog: CHANGELOG.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+
+plugins:
+  - search

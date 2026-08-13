@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_COLOR: "1"
+
+jobs:
+  lint:
+    name: lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: ruff check
+        run: uv run ruff check --output-format=github .
+      - name: ruff format
+        run: uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy airlock/
+
+  test:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: airlock
+          POSTGRES_USER: airlock
+          POSTGRES_DB: airlock_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync --all-extras
+      - name: pytest across every store backend
+        env:
+          AIRLOCK_TEST_POSTGRES: postgresql://airlock:airlock@localhost:5432/airlock_test
+        run: |
+          set -o pipefail
+          uv run pytest -rs --cov=airlock --cov-report=term-missing --cov-report=xml \
+            | tee pytest.log
+      - name: no backend may quietly skip
+        run: |
+          # A skipped backend is a backend nobody is testing, and it would pass silently.
+          if grep -qE "^SKIPPED|[0-9]+ skipped" pytest.log; then
+            echo "::error::tests were skipped; every store backend must run in CI"
+            grep -E "^SKIPPED" pytest.log || true
+            exit 1
+          fi
+      - uses: codecov/codecov-action@v5
+        if: matrix.python == '3.12'
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+  benchmark:
+    name: adversarial benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: the guardrails must hold
+        run: uv run python bench/run.py
+      - name: the example must still run
+        run: uv run python examples/payment_agent/run.py
+
+  package:
+    name: build and verify the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv build
+      - run: uv run --with twine python -m twine check dist/*
+      - name: the wheel must import and enforce on its own
+        run: |
+          uv venv /tmp/fresh
+          VIRTUAL_ENV=/tmp/fresh uv pip install dist/*.whl
+          /tmp/fresh/bin/python - <<'PY'
+          from airlock import Airlock, Caps, Policy
+          from airlock.errors import Blocked
+
+          lock = Airlock(policy=Policy(caps={"pay": Caps(max_per_call=10)}))
+
+          @lock.tool
+          def pay(amount: float) -> str:
+              return "txn"
+
+          assert pay(amount=10, _intent="i-1") == "txn"
+          assert pay(amount=10, _intent="i-1") == "txn"
+          try:
+              pay(amount=11, _intent="i-2")
+          except Blocked as exc:
+              assert exc.layer == "caps"
+          else:
+              raise SystemExit("the cap did not hold in a clean install")
+          print("installed wheel enforces correctly")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

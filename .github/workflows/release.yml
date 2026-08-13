@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: full check before publishing
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: airlock
+          POSTGRES_USER: airlock
+          POSTGRES_DB: airlock_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - run: uv run ruff check . && uv run ruff format --check . && uv run mypy airlock/
+      - env:
+          AIRLOCK_TEST_POSTGRES: postgresql://airlock:airlock@localhost:5432/airlock_test
+        run: uv run pytest
+      - run: uv run python bench/run.py
+      - name: the tag must match the packaged version
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          packaged="$(uv run python -c 'import airlock; print(airlock.__version__)')"
+          if [ "$tagged" != "$packaged" ]; then
+            echo "::error::tag $tagged does not match airlock.__version__ $packaged"
+            exit 1
+          fi
+
+  build:
+    name: build
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/agent-airlock
+    permissions:
+      id-token: write     # trusted publishing, no long-lived token in the repo
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1

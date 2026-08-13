@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.db
+*.db-wal
+*.db-shm
+.env
+.DS_Store
+# built artefacts
+site/
+docs/index.md
+.coverage
+coverage.xml
+
+# local working notes, not part of the published project
+tasks/

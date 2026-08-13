@@ -1,0 +1,60 @@
+name: Guardrail bypass
+description: You got an action past Airlock that should have been stopped
+title: "[bypass] "
+labels: ["guardrail-bypass", "priority"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These are the most valuable reports this project receives. Thank you.
+
+        **If this lets someone move money or cause damage in a deployed system, do not
+        file it here.** Report it privately: [Security → Report a
+        vulnerability](https://github.com/CodeKage25/airlock/security/advisories/new).
+        See [SECURITY.md](https://github.com/CodeKage25/airlock/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: promise
+    attributes:
+      label: Which promise did not hold?
+      options:
+        - At most once — one intent produced two real side effects
+        - Caps bind — something executed past a limit
+        - Fail closed — something executed while a dependency was down
+        - Approval required — a matching call executed without a human
+        - Audit is complete — an execution with no record, or an alterable record
+        - Enforcement outside the model — an argument changed a limit or a verdict
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Ideally a failing test in the style of `tests/`, or a benchmark case.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Which layer should have stopped it, and what happened instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Airlock version
+    validations:
+      required: true
+
+  - type: dropdown
+    id: store
+    attributes:
+      label: Store backend
+      options: ["memory://", "sqlite://", "postgres://", "a custom Store"]
+    validations:
+      required: true

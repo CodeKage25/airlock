@@ -1,0 +1,48 @@
+name: Bug report
+description: Something is broken, but no guardrail was bypassed
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If an action got past a guardrail that should have stopped it, use the
+        **Guardrail bypass** template instead, or report it privately if it affects a
+        deployed system.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Airlock version, Python version, store backend, and whether it is multi-process.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: false-block
+    attributes:
+      label: Is this a false block?
+      options:
+        - label: Airlock blocked something it should have allowed
