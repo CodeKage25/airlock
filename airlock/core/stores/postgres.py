@@ -186,13 +186,15 @@ class PostgresStore(Store):
             )
             violation = None
             for check in checks:
+                column = "COUNT(*)" if check.counts else "COALESCE(SUM(amount), 0)"
                 cur.execute(
-                    "SELECT COALESCE(SUM(amount), 0) AS total FROM spend "
+                    f"SELECT {column} AS total FROM spend "
                     "WHERE tool = %s AND scope IS NOT DISTINCT FROM %s AND at >= %s "
                     "AND key <> %s",
                     (tool, scope, check.since, key),
                 )
-                total = Decimal((cur.fetchone() or {}).get("total") or 0) + amount
+                measured = Decimal((cur.fetchone() or {}).get("total") or 0)
+                total = measured + (Decimal(1) if check.counts else amount)
                 if total > check.limit:
                     violation = SpendViolation(check.name, check.limit, total)
                     break

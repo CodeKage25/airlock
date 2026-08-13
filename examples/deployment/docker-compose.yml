@@ -1,0 +1,43 @@
+# A working Airlock deployment, so an evaluator gets a verdict in ten minutes.
+#
+#   cd examples/deployment && docker compose up
+#
+#   agent      http://localhost:8000      the guarded tools, behind an HTTP API
+#   metrics    http://localhost:8000/metrics
+#   prometheus http://localhost:9090
+#
+# Postgres because more than one replica needs it, and the agent is scaled to two so the
+# exactly-once and cap guarantees are being exercised across processes rather than asserted.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airlock
+      POSTGRES_PASSWORD: airlock
+      POSTGRES_DB: airlock
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airlock"]
+      interval: 5s
+      retries: 10
+    ports: ["5432:5432"]
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: examples/deployment/Dockerfile
+    environment:
+      AIRLOCK_STORE: postgresql://airlock:airlock@postgres:5432/airlock
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+    ports: ["8000-8001:8000"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+    depends_on: [agent]

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-airlock"
-version = "0.5.0"
+version = "0.6.0"
 description = "The safety layer between your AI agent and the real world."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,6 +26,9 @@ dependencies = ["pydantic>=2.13.4"]
 postgres = ["psycopg[binary,pool]>=3.3.4"]
 prometheus = ["prometheus-client>=0.20"]
 otel = ["opentelemetry-api>=1.25"]
+yaml = ["pyyaml>=6.0"]
+mcp = ["mcp>=1.2"]
+langchain = ["langchain-core>=0.3"]
 dev = [
   "pytest>=9.1.1",
   "pytest-cov>=7.1.0",
@@ -35,6 +38,9 @@ dev = [
   "opentelemetry-api>=1.25",
   "opentelemetry-sdk>=1.25",
   "hypothesis>=6.100",
+  "pyyaml>=6.0",
+  "types-PyYAML>=6.0",
+  "langchain-core>=0.3",
 ]
 
 [project.scripts]
@@ -62,6 +68,12 @@ warn_redundant_casts = true
 [[tool.mypy.overrides]]
 module = "airlock.core.*"
 strict = true
+
+[[tool.mypy.overrides]]
+# Optional adapters bind to libraries that may not be installed, and whose shape
+# differs across versions. The core stays strict; these stay honest about that.
+module = ["airlock.adapters.mcp", "airlock.adapters.langchain", "airlock.telemetry.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

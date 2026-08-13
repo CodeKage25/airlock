@@ -25,19 +25,28 @@ def derive_key(
     return idempotency_key(tool, payload, intent)
 
 
-def serialise(result: Any) -> tuple[str | None, bool]:
+#: Beyond this a result is recorded as having happened but is not kept for replay.
+#: A reservation row is not a blob store, and one oversized result should not be able to
+#: slow every future read of the table.
+MAX_RESULT_BYTES = 256 * 1024
+
+
+def serialise(result: Any, limit: int = MAX_RESULT_BYTES) -> tuple[str | None, bool]:
     try:
-        return json.dumps(result, sort_keys=True), True
+        payload = json.dumps(result, sort_keys=True)
     except (TypeError, ValueError):
         return None, False
+    if len(payload.encode("utf-8")) > limit:
+        return None, False
+    return payload, True
 
 
 def replay(reservation: Reservation) -> Any:
     """The original result of a completed call. Never re-executes."""
     if not reservation.replayable:
         raise Blocked(
-            f"intent {reservation.intent!r} already executed but its result was not "
-            "serialisable, so it cannot be replayed safely",
+            f"intent {reservation.intent!r} already executed but its result was not kept "
+            "(too large, or not serialisable), so it cannot be replayed safely",
             layer=LAYER,
         )
     return json.loads(reservation.result_json) if reservation.result_json is not None else None

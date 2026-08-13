@@ -17,7 +17,7 @@ Built for agents that touch things that matter, like payments, infrastructure, a
 pip install agent-airlock
 ```
 
-> **Status: v0.2 in active development.** Deployable across replicas on Postgres, with operator recovery for stuck intents. APIs may change before 1.0. Adversarial issues and early contributors are especially welcome, see [Contributing](#contributing).
+> **Status: v0.6, in active development.** Runs across replicas on Postgres, observes before it enforces, speaks MCP so the agent need not be Python, and ships an operator CLI for the moments that need one. APIs may change before 1.0. Adversarial issues and early contributors are especially welcome, see [Contributing](#contributing).
 
 ---
 
@@ -29,6 +29,7 @@ pip install agent-airlock
 - [Decision semantics](#decision-semantics)
 - [Core concepts](#core-concepts)
 - [API reference](#api-reference)
+- [Using it from another language, or another framework](#using-it-from-another-language-or-another-framework)
 - [Example: a payment agent that can't hurt you](#example-a-payment-agent-that-cant-hurt-you)
 - [Production readiness](#production-readiness)
 - [The benchmark](#the-benchmark)
@@ -86,6 +87,21 @@ def send_payment(to: str, amount: float, currency: str = "USD") -> str:
 
 tools = lock.tools()  # hand these to your agent framework
 ```
+
+Async is the same library with the tool awaited:
+
+```python
+from airlock.aio import AsyncAirlock
+
+lock = AsyncAirlock(policy=policy, store="postgresql://...")
+
+
+@lock.tool
+async def send_payment(to: str, amount: float) -> str:
+    return await payments_api.transfer(to=to, amount=amount)
+```
+
+Both share one decision function, so they cannot drift into deciding differently.
 
 What happens at runtime:
 
@@ -189,6 +205,8 @@ Airlock(
     stuck_after: timedelta = timedelta(minutes=5),   # when a pending call counts as stuck
     mode: str = "enforce",            # "shadow" evaluates and records without blocking
     telemetry: Telemetry | Sequence[Telemetry] | None = None,
+    principal: str | None = None,   # who is acting, when the caller does not say
+    audit_chain: bool = False,      # tamper-evident audit, at one serialised write
 )
 ```
 
@@ -205,6 +223,8 @@ Airlock(
 | `lock.intents.resolve(...)` | Settle one, as executed or not executed |
 | `lock.shadow.report()` | In observe-only mode, what enforcing would have changed |
 | `lock.snapshot()` | Pending approvals and stuck intents, for alerting |
+| `lock.audit.verify()` | With chaining on, whether the recorded history was altered |
+| `Policy.from_file(path)` | Load caps and approval rules from YAML |
 | `lock.check_policy()` | Raise if a cap or rule names a tool that was never registered |
 
 ### `Policy` and `Caps`
@@ -222,8 +242,10 @@ Caps(
     max_per_window: Decimal | None = None,
     window: timedelta | None = None,
     currency: str | None = None,
-    scope_by: str | None = None,      # partition caps by this context key
+    scope_by: str | None = None,      # partition by a context key, or "principal"
     amount_field: str = "amount",     # which argument the limits meter
+    max_calls_per_window: int | None = None,   # a rate limit, distinct from a budget
+    call_window: timedelta | None = None,
 )
 ```
 
@@ -449,9 +471,82 @@ retry opens a fresh one rather than reviving the stale decision.
 $ airlock audit --tool send_payment --outcome blocked --limit 20
 ```
 
+## Using it from another language, or another framework
+
+Airlock is an in-process Python library, so as a *library* it only helps Python. Over MCP it
+becomes a service, and the agent can be anything:
+
+```bash
+pip install 'agent-airlock[mcp]'
+```
+
+```python
+from airlock.adapters.mcp import serve
+
+serve(lock)  # stdio, ready for any MCP client
+```
+
+The policy, the store, the audit log and the approval queue stay on the Python side, which
+is the point: the guardrail is not something the agent can be talked out of. Each tool gains
+an `intent` argument, because the guarantee depends on it and the protocol has nowhere else
+to put one; the description tells the model to reuse it when retrying.
+
+| Framework | |
+|---|---|
+| OpenAI | `specs, dispatch = lock.as_openai_tools()` |
+| Anthropic | `specs, dispatch = lock.as_anthropic_tools()` |
+| LangChain / LangGraph | `as_langchain_tools(lock)`, using the run id as the intent |
+| MCP | `serve(lock)` |
+| Anything else | `lock.tools()` returns plain callables |
+
+Every adapter returns refusals as data rather than raising, in one shape, so a blocked call
+teaches the model what the limit was instead of crashing the loop.
+
+## Policy as a file, not as code
+
+A limit in a Python file can only be changed by a deploy and reviewed by an engineer, which
+is the wrong shape for something risk and compliance are accountable for.
+
+```yaml
+version: 1
+caps:
+  send_payment:
+    max_per_call: 100
+    max_per_day: 1000
+    currency: USD
+    scope_by: principal
+    max_calls_per_window: 60
+    call_window: 1m
+approvals:
+  - tool: send_payment
+    when: amount > 100
+    reason: large payments need a human
+    ttl: 4h
+  - tool: send_payment
+    when: context.new_beneficiary
+    reason: first payment to a new beneficiary
+```
+
+```python
+lock = Airlock(policy=Policy.from_file("policy.yaml"), store="postgresql://...")
+```
+
+Conditions are a small expression language, not `eval`: comparisons, boolean logic and a
+handful of string helpers. Calls, imports, comprehensions and dunder access are refused when
+the policy is loaded. A policy format that could execute arbitrary code would give away the
+exact property Airlock exists to protect.
+
 ## Example: a payment agent that can't hurt you
 
-[`examples/payment_agent/`](examples/payment_agent/) is a complete runnable demo:
+Two runnable examples. [`examples/deployment/`](examples/deployment/) is a real deployment
+shape — Postgres, two replicas, Prometheus — so the exactly-once and cap guarantees are
+being exercised across processes rather than asserted:
+
+```bash
+cd examples/deployment && docker compose up
+```
+
+[`examples/payment_agent/`](examples/payment_agent/) is the failure tour:
 
 - A **fake multi-leg payment rail** (on-ramp, transfer, off-ramp) with injectable failures
 - An agent driving it toward completed payments
@@ -486,16 +581,23 @@ airlock/
     idempotency.py   # key derivation + store interface
     intents.py       # stuck-intent listing and operator resolution
     approvals.py     # rules, pending queue, expiry, approve/reject
+    shadow.py        # observe-only evaluation and its report
+    policyfile.py    # YAML policy and its expression sandbox
+    redaction.py     # path-based argument redaction
+    telemetry.py     # the decision/duration/span interface
     risk.py          # risk hook interface
     audit.py         # append-only writer + query API
     canonical.py     # argument canonicalisation + deterministic keys
     stores/          # memory, sqlite, postgres, forward-only migrations
-  adapters/          # openai.py, anthropic.py
-  cli.py             # operator commands: intents, approvals, audit, migrate
+  adapters/          # openai.py, anthropic.py, mcp.py, langchain.py
+  telemetry/         # prometheus.py, otel.py
+  aio.py             # AsyncAirlock
+  cli.py             # operator commands: intents, approvals, shadow, audit, migrate
   errors.py
 bench/               # adversarial benchmark (see BENCHMARK.md)
 examples/
-  payment_agent/
+  payment_agent/     # the failure tour
+  deployment/        # postgres + two replicas + prometheus
 tests/
 ```
 
@@ -516,34 +618,43 @@ An honest status, because a safety library that oversells itself is worse than n
 | The audit log cannot be rewritten | SQLite and Postgres both abort `UPDATE`, `DELETE` and `TRUNCATE` by trigger, asserted from a raw connection |
 | An unknown outcome never retries blind | A timed-out attempt blocks every later attempt on that intent, until a human resolves it |
 | Upgrades never lose history | A database at an older schema migrates forward with its audit rows intact |
+| Async decides identically to sync | Both call one `prepare`; a parity test fails if the verdicts ever differ |
+| Each agent has its own budget | Caps scoped by principal, so a support bot cannot spend the treasury bot's allowance |
+| A rewritten audit record is detectable | Optional hash chaining; `lock.audit.verify()` names the first altered or removed entry |
+| Key derivation has no collisions | Property tests generate the arguments, rather than testing the ones we thought of |
+| Policy files cannot execute code | Calls, imports, comprehensions and dunder access are refused at load |
 
-Suite: 282 tests, every store-backed one run against all three backends, plus a 31-case
+Suite: 506 tests, every store-backed one run against all three backends, plus a 31-case
 adversarial benchmark. `mypy` is strict over `core/`.
 
 **Known limits.** These are real, and you should read them before deploying:
 
-- **Redaction is shallow.** `audit_redact` matches top-level argument names only; a secret
-  nested inside a dict argument still reaches the log.
-- **Sync only.** Tools and risk hooks are synchronous. Async support is next.
-- **Policy is Python.** No YAML policy files yet, so a policy change is a deploy and cannot
-  be reviewed by anyone who does not write Python.
-- **Audit and spend grow forever.** No retention, rollup or archival yet.
+- **Audit and spend grow forever.** No retention, rollup or archival yet. Both tables want a
+  plan before they are a year old.
+- **The store is synchronous.** `AsyncAirlock` awaits your tool and decides in a worker
+  thread. That is a deliberate trade — one decision path is worth more than one thread hop —
+  but it is not an asyncpg-native driver, and risk hooks stay synchronous.
+- **Policy files are not hot-reloaded.** `Policy.from_file` reads once at startup, so a
+  change is still a restart, just not a code change.
+- **No approval channel.** Slack and webhooks are not built; the queue is the Python API and
+  the CLI.
 - **`TRUNCATE` protection needs role separation.** The triggers stop the application from
   rewriting history; they do not stop the table's owner from dropping the triggers. Grant
   the application role `INSERT` and `SELECT` on `audit` and nothing more.
+- **Still no production hours.** Nothing here has run against real volume.
 - **Replay needs JSON.** A tool returning a non-serialisable object executes fine, but a
   later retry of that intent is blocked rather than replayed.
 - **No production hours.** Nothing here has run against real volume yet. The
   canonicalisation logic in particular has been tested against the adversarial cases we
   thought of, which is not the same as all of them.
 
-**Does it work with any language?** No. Airlock is an in-process Python library, so your
-agent has to be Python. The design ports to any language, the code does not. Wrapping it as
-an MCP server would make guarded tools reachable from any MCP client in any language, which
-is the highest-leverage item on the roadmap for reach.
+**Does it work with any language?** As a library, no: Airlock is in-process Python. Over
+MCP, yes — `serve(lock)` puts the guardrail behind the protocol and the agent can be
+TypeScript, Go, Claude Desktop or anything else. The policy and the audit log stay on the
+Python side, which is the point.
 
 **Does it work with any database?** Three backends ship, and the same suite runs against all
-of them, so the abstraction is known not to leak. `Store` is 17 methods, and any backend
+of them, so the abstraction is known not to leak. `Store` is 19 methods, and any backend
 offering an atomic conditional write can implement them: MySQL, DynamoDB and Redis all
 qualify. That single primitive is what makes "executes at most once" true, so a backend
 without it cannot be used.
@@ -614,9 +725,11 @@ Python 3.11+. Core dependencies: pydantic and the standard library. Postgres, re
       operator CLI
 - [x] **v0.3** shadow mode with a graduation path per tool
 - [x] **v0.4** OpenTelemetry and Prometheus
-- [ ] **v0.5** async tools, agent identity, policy as data
-- [ ] **v0.6** MCP server, LangChain/LangGraph adapter, Slack approval channel
-- [ ] **Later** hash-chained audit, audit export and retention, anomaly-detection risk hook
+- [x] **v0.5** async tools, agent identity, hash-chained audit, nested redaction
+- [x] **v0.6** MCP server, LangChain/LangGraph adapter, policy as data, rate limits,
+      reference deployment
+- [ ] **v0.7** audit retention and export, Slack approval channel, policy hot reload
+- [ ] **Later** anomaly-detection risk hook, a web view of the queue
 
 Full detail and reasoning: [`ROADMAP.md`](ROADMAP.md).
 

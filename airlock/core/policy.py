@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -37,6 +39,8 @@ class Caps(BaseModel):
     currency: str | None = None
     scope_by: str | None = None
     amount_field: str = "amount"
+    max_calls_per_window: int | None = None
+    call_window: timedelta | None = None
 
     @field_validator("max_per_call", "max_per_day", "max_per_window", mode="before")
     @classmethod
@@ -54,8 +58,11 @@ class Caps(BaseModel):
     def _window_pairs(self) -> Caps:
         if (self.max_per_window is None) != (self.window is None):
             raise ValueError("max_per_window and window must be set together")
-        if self.window is not None and self.window <= timedelta(0):
-            raise ValueError("window must be positive")
+        if (self.max_calls_per_window is None) != (self.call_window is None):
+            raise ValueError("max_calls_per_window and call_window must be set together")
+        for span in (self.window, self.call_window):
+            if span is not None and span <= timedelta(0):
+                raise ValueError("a window must be positive")
         return self
 
     def windows(self) -> list[tuple[str, timedelta, Decimal]]:
@@ -82,6 +89,40 @@ class Policy:
                     f"risk hook {getattr(hook, '__name__', hook)!r} is async; "
                     "v0.1 runs sync hooks only"
                 )
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> Policy:
+        """Load a policy from YAML, so limits can be reviewed by whoever owns them."""
+        from airlock.core.policyfile import load
+
+        return cls.from_dict(load(path))
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Policy:
+        from airlock.core.approvals import when
+        from airlock.core.policyfile import Expression, parse_duration
+
+        version = data.get("version", 1)
+        if version != 1:
+            raise PolicyError(f"policy version {version!r} is not supported; this is version 1")
+
+        caps = {name: Caps(**spec) for name, spec in (data.get("caps") or {}).items()}
+
+        approvals = []
+        for index, rule in enumerate(data.get("approvals") or []):
+            missing = {"tool", "when"} - set(rule)
+            if missing:
+                raise PolicyError(f"approval rule {index} is missing {', '.join(sorted(missing))}")
+            approvals.append(
+                when(
+                    rule["tool"],
+                    Expression(rule["when"]),
+                    rule.get("reason"),
+                    ttl=parse_duration(rule.get("ttl")),
+                )
+            )
+
+        return cls(caps=caps, approvals=approvals)
 
     def caps_for(self, tool: str) -> Caps | None:
         return self.caps.get(tool)
@@ -118,11 +159,26 @@ def meter(call: Call, caps: Caps) -> Decimal:
 
 
 def spend_checks(caps: Caps, now: datetime) -> list[SpendCheck]:
-    return [SpendCheck(name, now - span, limit) for name, span, limit in caps.windows()]
+    checks = [SpendCheck(name, now - span, limit) for name, span, limit in caps.windows()]
+    if caps.max_calls_per_window is not None and caps.call_window is not None:
+        checks.append(
+            SpendCheck(
+                "max_calls_per_window",
+                now - caps.call_window,
+                Decimal(caps.max_calls_per_window),
+                counts=True,
+            )
+        )
+    return checks
 
 
 def violation_reason(tool: str, scope: str | None, violation: SpendViolation) -> str:
     where = f" in scope {scope!r}" if scope else ""
+    if violation.name == "max_calls_per_window":
+        return (
+            f"this would be call {violation.total} to {tool}{where}, "
+            f"over the rate limit of {violation.limit}"
+        )
     return (
         f"this would take {tool}{where} to {violation.total}, "
         f"over the {violation.name} of {violation.limit}"

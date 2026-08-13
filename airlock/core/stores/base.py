@@ -12,11 +12,16 @@ from airlock.core.types import ApprovalRecord, AuditEntry, RequestStatus, Reserv
 
 @dataclass(frozen=True, slots=True)
 class SpendCheck:
-    """One window limit, evaluated at the moment spend is written."""
+    """One window limit, evaluated at the moment spend is written.
+
+    ``counts`` switches from "how much was spent" to "how many calls were made", so a
+    rate limit is enforced in the same transaction as a budget rather than racing it.
+    """
 
     name: str
     since: datetime
     limit: Decimal
+    counts: bool = False
 
 
 @dataclass(frozen=True, slots=True)

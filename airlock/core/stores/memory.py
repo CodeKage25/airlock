@@ -123,7 +123,17 @@ class MemoryStore(Store):
         with self._lock:
             violation = None
             for check in checks:
-                total = self.spend_since(tool, scope, check.since, exclude_key=key) + amount
+                if check.counts:
+                    total = Decimal(
+                        1
+                        + sum(
+                            1
+                            for other, (t, sc, _, at) in self._spend.items()
+                            if t == tool and sc == scope and at >= check.since and other != key
+                        )
+                    )
+                else:
+                    total = self.spend_since(tool, scope, check.since, exclude_key=key) + amount
                 if total > check.limit:
                     violation = SpendViolation(check.name, check.limit, total)
                     break

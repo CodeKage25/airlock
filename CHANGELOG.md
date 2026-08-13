@@ -9,6 +9,68 @@ affects.
 
 ## [Unreleased]
 
+## [0.6.0]
+
+Reach: other languages, other frameworks, and a policy the people who own the limits can read.
+
+### Added
+
+- **MCP server.** `serve(lock)` puts the guardrail behind the protocol, so the agent can be
+  TypeScript, Go, Claude Desktop or anything else. Each tool gains an `intent` argument,
+  because the guarantee depends on it and the protocol has nowhere else to put one.
+- **LangChain / LangGraph adapter.** `as_langchain_tools(lock)`, using the run id as the
+  intent: stable across a retry of a step, distinct across new ones.
+- **Policy as data.** `Policy.from_file("policy.yaml")` with caps, approval rules and
+  durations written as `4h`. Conditions are a small expression language, not `eval`: calls,
+  imports, comprehensions and dunder attribute access are all refused at load, because a
+  policy format that could execute code would give away the property being protected.
+- **Rate limits** as `max_calls_per_window` / `call_window`, distinct from a spend budget and
+  enforced in the same transaction, so the two cannot race each other.
+- **A reference deployment.** `examples/deployment/` runs Postgres, two agent replicas and
+  Prometheus under compose, so the exactly-once and cap guarantees are exercised across
+  processes rather than asserted.
+
+### Changed
+
+- Results larger than 256 KiB are recorded as executed but not kept for replay. A
+  reservation row is not a blob store, and one oversized result should not slow every future
+  read of the table. A retry of such an intent is blocked rather than replayed.
+
+## [0.5.0]
+
+Who is acting, whether the record can be trusted, and tools that are awaited.
+
+### Added
+
+- **Agent identity.** Calls carry a `principal`; caps can partition by it
+  (`scope_by="principal"`), approval rules and risk hooks can read it, and the audit log
+  can be queried by it. An approved call keeps the principal that proposed it while
+  recording the approving human as the actor.
+- **Tamper-evident audit**, opt-in via `audit_chain=True`. Each entry carries the digest of
+  its predecessor, and `lock.audit.verify()` names the first altered or removed record.
+  Triggers prevent the application rewriting history; this detects a rewrite by anyone who
+  gets past them. It costs one serialised write, so it is off by default.
+- **Nested redaction.** `audit_redact` takes dotted paths with `*` wildcards, and a bare
+  name now matches at any depth.
+- **Async tools** via `airlock.aio.AsyncAirlock`. The decision comes from the same `prepare`
+  function the synchronous pipeline uses, with a parity test that fails if the two ever
+  disagree. A synchronous `Airlock` now refuses an async tool outright.
+- Property tests for idempotency key derivation, generating the collisions rather than
+  testing the ones someone thought of.
+
+### Fixed
+
+- **Approving an async call through the synchronous path marked the request approved before
+  the runner rejected it**, consuming an approval nobody could retry. Anything that can
+  refuse now refuses before the request is marked decided. *Affects: the
+  approval-required promise.*
+
+### Changed
+
+- The pipeline splits into `prepare` / execute / `settle`, which is what lets sync and async
+  share one decision. The `_Passthrough` machinery is gone: the tool call now sits outside
+  the fail-closed guard rather than nested inside it.
+
 ## [0.4.0]
 
 Runnable by people who did not write it.
@@ -151,7 +213,9 @@ First release. The five layers, and the promises they make.
 - **A 31-case adversarial benchmark** with two hard invariants: zero duplicate executions and
   zero fail-closed violations.
 
-[Unreleased]: https://github.com/CodeKage25/airlock/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/CodeKage25/airlock/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/CodeKage25/airlock/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/CodeKage25/airlock/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/CodeKage25/airlock/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/CodeKage25/airlock/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/CodeKage25/airlock/compare/v0.1.0...v0.2.0

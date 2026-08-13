@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: airlock
+    static_configs:
+      - targets: ["agent:8000"]
+
+# The alerts from the operations runbook, as rules you can lift.
+rule_files: []

@@ -58,7 +58,7 @@ A queue with no expiry rots, and someone eventually approves a three-week-old pa
 
 ---
 
-## P1 — adoption blockers
+## P1 — adoption blockers  ✅ shipped
 
 These decide whether a company will *choose* it.
 
@@ -81,7 +81,7 @@ Companies do not run components they cannot see.
   per scope, pending-approval age, stuck-intent gauge
 - A reference Grafana dashboard in the repo
 
-### 7. Async
+### 7. Async  ✅ shipped in v0.5
 
 Most modern Python agent stacks are async. `v0.3` is too late for something this basic; it
 is closer to a blocker than a feature.
@@ -89,7 +89,7 @@ is closer to a blocker than a feature.
 - Async pipeline and store interfaces, sync kept as the thin wrapper
 - Async risk hooks, which the current `Policy` explicitly rejects
 
-### 8. Agent identity
+### 8. Agent identity  ✅ shipped in v0.5
 
 The README says autonomy is earned per action class, but there is no notion of *who* is
 acting. One `Airlock` instance means one policy for every caller. Companies run a support
@@ -99,7 +99,7 @@ bot and a treasury bot and do not want them sharing a budget.
 - Per-principal caps and rules, and per-principal audit queries
 - Budget delegation: a parent task holds an allowance that sub-agents draw down
 
-### 9. Policy as data
+### 9. Policy as data  ✅ shipped in v0.6
 
 Policy is Python today. Companies want it version-controlled, reviewable by risk and
 compliance people who do not write Python, and changeable without a deploy.
@@ -134,16 +134,16 @@ effect.
 
 ---
 
-## P3 — reach
+## P3 — reach  ✅ shipped
 
-### 10. MCP server
+### 10. MCP server  ✅ shipped in v0.6
 
 The answer to "does this work with any language". Airlock is an in-process Python library, so
 today the agent must be Python. Exposing guarded tools over MCP makes them reachable from any
 MCP client in any language, and turns Airlock into infrastructure rather than a dependency.
 Highest-leverage item here by a distance.
 
-### 11. Framework adapters
+### 11. Framework adapters  ✅ LangChain in v0.6
 
 LangChain/LangGraph, Pydantic-AI, CrewAI. Adoption tracks integration surface.
 
@@ -182,8 +182,9 @@ The real differentiator in regulated industries.
 1. ~~**P0** — it can be deployed~~ ✅ v0.2
 2. **P2 trust surface** — cheap, and it is what an evaluator sees first
 3. ~~**Shadow mode and observability**~~ ✅ v0.3 and v0.4
-4. **Async, MCP, identity** — it can be adopted by more than Python shops
-5. **Compliance and hardening** — it can be adopted by the industries that need it most
+4. ~~**Async, MCP, identity**~~ ✅ v0.5 and v0.6
+5. **Compliance and hardening** — partly done: hash-chained audit, property-tested keys,
+   rate limits and result size limits shipped. Retention, export and reporting remain.
 
 ### What P0 actually cost
 

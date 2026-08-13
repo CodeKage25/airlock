@@ -222,7 +222,11 @@ class SqliteStore(Store):
                     "WHERE tool = ? AND scope IS ? AND at >= ? AND key <> ?",
                     (tool, scope, _ts(check.since), key),
                 ).fetchall()
-                total = sum((Decimal(row["amount"]) for row in rows), Decimal(0)) + amount
+                total = (
+                    Decimal(len(rows) + 1)
+                    if check.counts
+                    else sum((Decimal(row["amount"]) for row in rows), Decimal(0)) + amount
+                )
                 if total > check.limit:
                     violation = SpendViolation(check.name, check.limit, total)
                     break
