@@ -26,7 +26,7 @@ dependencies = ["pydantic>=2.13.4"]
 postgres = ["psycopg[binary,pool]>=3.3.4"]
 prometheus = ["prometheus-client>=0.20"]
 otel = ["opentelemetry-api>=1.25"]
-yaml = ["pyyaml>=6.0"]
+yaml = ["pyyaml>=6.0.3"]
 mcp = ["mcp>=1.2"]
 langchain = ["langchain-core>=0.3"]
 dev = [
@@ -38,7 +38,7 @@ dev = [
   "opentelemetry-api>=1.25",
   "opentelemetry-sdk>=1.25",
   "hypothesis>=6.100",
-  "pyyaml>=6.0",
+  "pyyaml>=6.0.3",
   "types-PyYAML>=6.0",
   "langchain-core>=0.3",
 ]
