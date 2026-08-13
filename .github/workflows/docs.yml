@@ -18,13 +18,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Deploying needs Pages set to "GitHub Actions" once, under Settings → Pages.
       # This step cannot do it for you: pages: write covers deploying to an existing
       # site, while creating one needs admin rights the default token does not carry,
       # so enablement: true only ever returns "Resource not accessible by integration".
       - uses: actions/configure-pages@v5
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: stage the root markdown into the site
