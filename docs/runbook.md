@@ -140,6 +140,12 @@ GRANT INSERT, SELECT ON audit TO airlock_app;
 REVOKE UPDATE, DELETE, TRUNCATE ON audit FROM airlock_app;
 ```
 
+## Repository setup, once
+
+Pages must be set to **GitHub Actions** under Settings → Pages before the docs workflow can
+deploy. The workflow cannot switch it on itself: `pages: write` covers deploying to a site
+that exists, but creating one needs admin rights the default token does not have.
+
 ## Capacity and growth
 
 Two tables grow without bound, and neither has automatic retention yet:

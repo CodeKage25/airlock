@@ -104,6 +104,15 @@ From 1.0:
   requires a major version and a documented migration.
 - Audit schema changes are additive within a major version.
 
+## Repository setup
+
+Two settings have to be enabled by hand once, because a workflow token cannot do either:
+
+- **Pages**: Settings → Pages → Source → **GitHub Actions**. Without it the docs workflow
+  builds fine and then fails at deploy with a 404.
+- **PyPI trusted publishing**: create a `pypi` environment and register this repository as a
+  trusted publisher on PyPI. Only needed when you cut a release tag.
+
 ## Reporting security issues
 
 Do not open a public issue. See [`SECURITY.md`](SECURITY.md).
