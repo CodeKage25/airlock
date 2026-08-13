@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Deploying needs Pages set to "GitHub Actions" once, under Settings → Pages.
       # This step cannot do it for you: pages: write covers deploying to an existing
       # site, while creating one needs admin rights the default token does not carry,
