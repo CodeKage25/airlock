@@ -102,6 +102,10 @@ class ApprovalRequest:
         return self._record.scope
 
     @property
+    def principal(self) -> str | None:
+        return self._record.principal
+
+    @property
     def reason(self) -> str:
         return self._record.reason
 
@@ -138,12 +142,14 @@ class Approvals:
         runner: Runner,
         audit: AuditLog,
         default_ttl: timedelta | None = None,
+        precheck: Callable[[ApprovalRecord], None] | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._runner = runner
         self._audit = audit
         self._default_ttl = default_ttl
+        self._precheck = precheck
 
     def open(
         self, call: Call, key: str, reason: str, ttl: timedelta | None = None
@@ -166,6 +172,7 @@ class Approvals:
             args=dict(call.args),
             context=dict(call.context),
             scope=call.scope,
+            principal=call.principal,
             expires_at=now + deadline if deadline is not None else None,
         )
         self._store.create_request(record)
@@ -200,6 +207,12 @@ class Approvals:
         return ApprovalRequest(record, self) if record is not None else None
 
     def approve(self, request_id: str, by: str) -> Any:
+        # Anything that can refuse has to refuse before the request is marked decided,
+        # or a rejected attempt consumes the approval and nobody can retry it.
+        if self._precheck is not None:
+            existing = self._store.get_request(request_id)
+            if existing is not None:
+                self._precheck(existing)
         record = self._decide(request_id, RequestStatus.APPROVED, by=by, reason=None)
         return self._runner(record, by)
 

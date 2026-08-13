@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -27,6 +28,9 @@ def _utcnow() -> datetime:
 class Airlock:
     """Wraps tools so an agent proposes actions and Airlock decides whether they run."""
 
+    #: Overridden by :class:`~airlock.aio.AsyncAirlock`.
+    accepts_async = False
+
     def __init__(
         self,
         policy: Policy | None = None,
@@ -39,6 +43,8 @@ class Airlock:
         stuck_after: timedelta = DEFAULT_STUCK_AFTER,
         mode: Mode | str = Mode.ENFORCE,
         telemetry: Telemetry | Sequence[Telemetry] | None = None,
+        principal: str | None = None,
+        audit_chain: bool = False,
     ) -> None:
         if fail_mode != "closed":
             raise PolicyError("fail_mode is always 'closed'; there is no fail-open mode")
@@ -47,10 +53,18 @@ class Airlock:
         self.policy = policy or Policy()
         self.store: Store = from_url(store) if isinstance(store, str) else store
         self.clock = clock or _utcnow
+        self.principal = principal
         self.telemetry = resolve(telemetry)
-        self.audit = AuditLog(self.store, self.clock, audit_redact, self.telemetry)
+        self.audit = AuditLog(
+            self.store, self.clock, audit_redact, self.telemetry, chain=audit_chain
+        )
         self.approvals = Approvals(
-            self.store, self.clock, self._run_approved, self.audit, approval_ttl
+            self.store,
+            self.clock,
+            self._run_approved,
+            self.audit,
+            approval_ttl,
+            precheck=self._before_approval,
         )
         self.intents = Intents(self.store, self.clock, self.audit, stuck_after)
         self.shadow = Shadow(self.audit)
@@ -84,6 +98,13 @@ class Airlock:
         """
 
         def decorate(target: Callable[..., Any]) -> Callable[..., Any]:
+            if not self.accepts_async and inspect.iscoroutinefunction(target):
+                # A coroutine called without await returns immediately without running,
+                # so this would audit an execution that never happened.
+                raise PolicyError(
+                    f"{getattr(target, '__name__', target)!r} is async; use "
+                    "airlock.aio.AsyncAirlock so the call is actually awaited"
+                )
             registered = tool_layer.build(
                 target,
                 name=name,
@@ -104,6 +125,7 @@ class Airlock:
             *args: Any,
             _intent: str = "",
             _context: Mapping[str, Any] | None = None,
+            _principal: str | None = None,
             **kwargs: Any,
         ) -> Any:
             return pipeline.run(
@@ -113,6 +135,7 @@ class Airlock:
                 kwargs,
                 intent=_intent,
                 context=_context,
+                principal=_principal or self.principal,
             )
 
         wrapped.airlock_tool = registered  # type: ignore[attr-defined]
@@ -160,9 +183,14 @@ class Airlock:
             intent=record.intent,
             context=dict(record.context),
             actor=actor,
+            principal=record.principal,
             bypass_approval=True,
             key_override=record.key,
         )
+
+    def _before_approval(self, record: ApprovalRecord) -> None:
+        """Raise here rather than in the runner, so a refusal does not consume the request."""
+        return None
 
     def snapshot(self) -> Snapshot:
         """Queue and stuck-intent state, read on demand.

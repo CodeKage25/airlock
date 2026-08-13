@@ -6,13 +6,21 @@ import threading
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, suppress
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from airlock.core.canonical import chain_hash
 from airlock.core.stores import migrations
-from airlock.core.stores.base import ReserveResult, SpendCheck, SpendViolation, Store
+from airlock.core.stores.base import (
+    ReserveResult,
+    SpendCheck,
+    SpendViolation,
+    Store,
+    _chained,
+)
 from airlock.core.types import (
     ApprovalRecord,
     AuditEntry,
@@ -237,11 +245,24 @@ class SqliteStore(Store):
             ).fetchall()
         return sum((Decimal(row["amount"]) for row in rows), Decimal(0))
 
-    def append_audit(self, entry: AuditEntry) -> None:
+    def append_audit(self, entry: AuditEntry, chain: bool = False) -> AuditEntry:
         with self._tx() as conn:
+            if chain:
+                # BEGIN IMMEDIATE already serialises writers, so reading the tip and
+                # appending to it cannot interleave with another append.
+                row = conn.execute(
+                    "SELECT entry_hash FROM audit ORDER BY seq DESC LIMIT 1"
+                ).fetchone()
+                previous = row["entry_hash"] if row else None
+                entry = replace(
+                    entry,
+                    prev_hash=previous,
+                    entry_hash=chain_hash(previous, _chained(entry)),
+                )
             conn.execute(
                 "INSERT INTO audit (id, at, tool, intent, key, outcome, layer, reason, scope, "
-                "args, result_ref, actor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "args, result_ref, actor, principal, prev_hash, entry_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     entry.id,
                     _ts(entry.at),
@@ -255,8 +276,12 @@ class SqliteStore(Store):
                     json.dumps(dict(entry.args), sort_keys=True),
                     entry.result_ref,
                     entry.actor,
+                    entry.principal,
+                    entry.prev_hash,
+                    entry.entry_hash,
                 ),
             )
+        return entry
 
     def query_audit(
         self,
@@ -264,13 +289,14 @@ class SqliteStore(Store):
         tool: str | None = None,
         intent: str | None = None,
         outcome: str | None = None,
+        principal: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int | None = None,
     ) -> list[AuditEntry]:
         clauses: list[str] = []
         params: list[Any] = []
-        for column, value in (("tool", tool), ("intent", intent)):
+        for column, value in (("tool", tool), ("intent", intent), ("principal", principal)):
             if value is not None:
                 clauses.append(f"{column} = ?")
                 params.append(value)
@@ -294,7 +320,8 @@ class SqliteStore(Store):
         with self._tx() as conn:
             conn.execute(
                 "INSERT INTO approvals (id, tool, intent, key, reason, created_at, args, "
-                "context, scope, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "context, scope, status, expires_at, principal) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
                     record.tool,
@@ -307,6 +334,7 @@ class SqliteStore(Store):
                     record.scope,
                     record.status.value,
                     _ts(record.expires_at) if record.expires_at else None,
+                    record.principal,
                 ),
             )
 
@@ -410,6 +438,9 @@ def _audit(row: sqlite3.Row) -> AuditEntry:
         args=json.loads(row["args"]),
         result_ref=row["result_ref"],
         actor=row["actor"],
+        principal=row["principal"],
+        prev_hash=row["prev_hash"],
+        entry_hash=row["entry_hash"],
     )
 
 
@@ -425,6 +456,7 @@ def _approval(row: sqlite3.Row) -> ApprovalRecord:
         context=json.loads(row["context"]),
         scope=row["scope"],
         status=RequestStatus(row["status"]),
+        principal=row["principal"],
         expires_at=_dt(row["expires_at"]),
         decided_at=_dt(row["decided_at"]),
         decided_by=row["decided_by"],

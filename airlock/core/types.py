@@ -54,6 +54,7 @@ class Call:
     context: Mapping[str, Any] = field(default_factory=dict)
     intent: str = ""
     scope: str | None = None
+    principal: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
@@ -89,6 +90,9 @@ class AuditEntry:
     args: Mapping[str, Any] = field(default_factory=dict)
     result_ref: str | None = None
     actor: str | None = None
+    principal: str | None = None
+    prev_hash: str | None = None
+    entry_hash: str | None = None
 
 
 class ReservationState(StrEnum):
@@ -130,6 +134,7 @@ class ApprovalRecord:
     args: Mapping[str, Any] = field(default_factory=dict)
     context: Mapping[str, Any] = field(default_factory=dict)
     scope: str | None = None
+    principal: str | None = None
     status: RequestStatus = RequestStatus.PENDING
     expires_at: datetime | None = None
     decided_at: datetime | None = None

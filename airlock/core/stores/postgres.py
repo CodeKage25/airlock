@@ -3,12 +3,20 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from airlock.core.canonical import chain_hash
 from airlock.core.stores import migrations
-from airlock.core.stores.base import ReserveResult, SpendCheck, SpendViolation, Store
+from airlock.core.stores.base import (
+    ReserveResult,
+    SpendCheck,
+    SpendViolation,
+    Store,
+    _chained,
+)
 from airlock.core.types import (
     ApprovalRecord,
     AuditEntry,
@@ -208,12 +216,24 @@ class PostgresStore(Store):
             )
             return Decimal((cur.fetchone() or {}).get("total") or 0)
 
-    def append_audit(self, entry: AuditEntry) -> None:
+    def append_audit(self, entry: AuditEntry, chain: bool = False) -> AuditEntry:
         with self._tx() as cur:
+            if chain:
+                # Appending to a chain has to be serialised, or two writers link to the
+                # same predecessor and the chain forks. This is why chaining is opt-in.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext('airlock_audit_chain'))")
+                cur.execute("SELECT entry_hash FROM audit ORDER BY seq DESC LIMIT 1")
+                row = cur.fetchone()
+                previous = row["entry_hash"] if row else None
+                entry = replace(
+                    entry,
+                    prev_hash=previous,
+                    entry_hash=chain_hash(previous, _chained(entry)),
+                )
             cur.execute(
                 "INSERT INTO audit (id, at, tool, intent, key, outcome, layer, reason, scope, "
-                "args, result_ref, actor) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "args, result_ref, actor, principal, prev_hash, entry_hash) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     entry.id,
                     entry.at,
@@ -227,8 +247,12 @@ class PostgresStore(Store):
                     json.dumps(dict(entry.args), sort_keys=True),
                     entry.result_ref,
                     entry.actor,
+                    entry.principal,
+                    entry.prev_hash,
+                    entry.entry_hash,
                 ),
             )
+        return entry
 
     def query_audit(
         self,
@@ -236,13 +260,14 @@ class PostgresStore(Store):
         tool: str | None = None,
         intent: str | None = None,
         outcome: str | None = None,
+        principal: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int | None = None,
     ) -> list[AuditEntry]:
         clauses: list[str] = []
         params: list[Any] = []
-        for column, value in (("tool", tool), ("intent", intent)):
+        for column, value in (("tool", tool), ("intent", intent), ("principal", principal)):
             if value is not None:
                 clauses.append(f"{column} = %s")
                 params.append(value)
@@ -266,8 +291,8 @@ class PostgresStore(Store):
         with self._tx() as cur:
             cur.execute(
                 "INSERT INTO approvals (id, tool, intent, key, reason, created_at, args, "
-                "context, scope, status, expires_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "context, scope, status, expires_at, principal) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     record.id,
                     record.tool,
@@ -280,6 +305,7 @@ class PostgresStore(Store):
                     record.scope,
                     record.status.value,
                     record.expires_at,
+                    record.principal,
                 ),
             )
 
@@ -368,6 +394,9 @@ def _audit(row: dict[str, Any]) -> AuditEntry:
         args=row["args"],
         result_ref=row["result_ref"],
         actor=row["actor"],
+        principal=row.get("principal"),
+        prev_hash=row.get("prev_hash"),
+        entry_hash=row.get("entry_hash"),
     )
 
 
@@ -383,6 +412,7 @@ def _approval(row: dict[str, Any]) -> ApprovalRecord:
         context=row["context"],
         scope=row["scope"],
         status=RequestStatus(row["status"]),
+        principal=row.get("principal"),
         expires_at=row.get("expires_at"),
         decided_at=row["decided_at"],
         decided_by=row["decided_by"],

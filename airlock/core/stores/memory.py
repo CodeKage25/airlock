@@ -6,12 +6,14 @@ from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 
+from airlock.core.canonical import chain_hash
 from airlock.core.stores import migrations
 from airlock.core.stores.base import (
     ReserveResult,
     SpendCheck,
     SpendViolation,
     Store,
+    _chained,
     _limit,
     _match,
 )
@@ -146,9 +148,15 @@ class MemoryStore(Store):
                 Decimal(0),
             )
 
-    def append_audit(self, entry: AuditEntry) -> None:
+    def append_audit(self, entry: AuditEntry, chain: bool = False) -> AuditEntry:
         with self._lock:
+            if chain:
+                previous = self._audit[-1].entry_hash if self._audit else None
+                entry = replace(
+                    entry, prev_hash=previous, entry_hash=chain_hash(previous, _chained(entry))
+                )
             self._audit.append(entry)
+            return entry
 
     def query_audit(self, **filters: object) -> list[AuditEntry]:
         with self._lock:

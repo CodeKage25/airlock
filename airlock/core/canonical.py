@@ -85,3 +85,12 @@ def to_decimal(value: Any) -> Decimal:
     if not dec.is_finite():
         raise ValueError(f"{value!r} is not finite")
     return dec
+
+
+def chain_hash(previous: str | None, entry: Mapping[str, Any]) -> str:
+    """Link one audit entry to its predecessor.
+
+    Append-only triggers stop the application rewriting history. A chain makes a rewrite
+    by anyone else *detectable*, which is the thing auditors actually ask for.
+    """
+    return digest(previous or "", entry)

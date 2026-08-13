@@ -111,7 +111,12 @@ class Store(ABC):
     ) -> Decimal: ...
 
     @abstractmethod
-    def append_audit(self, entry: AuditEntry) -> None: ...
+    def append_audit(self, entry: AuditEntry, chain: bool = False) -> AuditEntry:
+        """Append one record, optionally linked to its predecessor.
+
+        Chaining costs a serialisation point per write, so it is opt-in: you pay for
+        tamper-evidence only where an auditor asks for it.
+        """
 
     @abstractmethod
     def query_audit(
@@ -120,6 +125,7 @@ class Store(ABC):
         tool: str | None = None,
         intent: str | None = None,
         outcome: str | None = None,
+        principal: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int | None = None,
@@ -158,7 +164,7 @@ class Store(ABC):
 
 
 def _match(entry: AuditEntry, **filters: Any) -> bool:
-    for name in ("tool", "intent"):
+    for name in ("tool", "intent", "principal"):
         wanted = filters.get(name)
         if wanted is not None and getattr(entry, name) != wanted:
             return False
@@ -177,3 +183,26 @@ def _limit(entries: Sequence[AuditEntry], limit: int | None) -> list[AuditEntry]
 
 def _frozen(mapping: Mapping[str, Any]) -> dict[str, Any]:
     return dict(mapping)
+
+
+def _chained(entry: AuditEntry) -> dict[str, Any]:
+    """The fields a chain hash covers: everything that describes the decision.
+
+    Deliberately excludes the hashes themselves, and includes nothing derived, so any
+    backend produces the same digest for the same record.
+    """
+    return {
+        "id": entry.id,
+        "at": entry.at.isoformat(),
+        "tool": entry.tool,
+        "intent": entry.intent,
+        "key": entry.key,
+        "outcome": entry.outcome.value,
+        "layer": entry.layer,
+        "reason": entry.reason,
+        "scope": entry.scope,
+        "args": dict(entry.args),
+        "result_ref": entry.result_ref,
+        "actor": entry.actor,
+        "principal": entry.principal,
+    }

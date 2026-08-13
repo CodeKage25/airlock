@@ -6,6 +6,7 @@ import pytest
 
 from airlock import Airlock, Policy, approval
 from airlock.cli import main
+from airlock.core.stores import migrations
 from airlock.errors import Blocked
 
 APP_MODULE = "tests.cli_app"
@@ -136,7 +137,8 @@ def test_the_schema_version_is_reportable(tmp_path: Any, capsys: Any) -> None:
     Airlock(store=url).close()
 
     assert main(["--store", url, "migrate"]) == 0
-    assert "schema version 3" in capsys.readouterr().out
+    # Not hardcoded: a new migration must not break this test.
+    assert f"schema version {migrations.CURRENT}" in capsys.readouterr().out
 
 
 def test_a_missing_store_is_a_clear_error() -> None:

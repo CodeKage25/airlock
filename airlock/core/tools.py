@@ -12,7 +12,7 @@ from airlock.errors import PolicyError
 
 LAYER = "tool"
 
-RESERVED = ("_intent", "_context")
+RESERVED = ("_intent", "_context", "_principal")
 
 
 @dataclass(frozen=True)

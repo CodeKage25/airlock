@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -39,14 +42,6 @@ LAYERS = (
 )
 
 
-class _Passthrough(Exception):
-    """Carries an error that must reach the caller unconverted."""
-
-    def __init__(self, cause: BaseException) -> None:
-        super().__init__(str(cause))
-        self.cause = cause
-
-
 @dataclass
 class Runtime:
     store: Store
@@ -60,6 +55,25 @@ class Runtime:
     telemetry: Telemetry = field(default_factory=NullTelemetry)
 
 
+@dataclass(frozen=True)
+class Ticket:
+    """Authorisation for exactly one call. Every layer has already allowed it, the
+    reservation is held, and the spend is ledgered. All that remains is to run the tool
+    and record what happened."""
+
+    tool: Tool
+    call: Call
+    key: str
+    actor: str | None = None
+
+
+@dataclass(frozen=True)
+class Replay:
+    """The original result of a call that already happened. The tool is not run."""
+
+    result: Any
+
+
 def run(
     rt: Runtime,
     tool: Tool,
@@ -69,6 +83,7 @@ def run(
     intent: str,
     context: Mapping[str, Any] | None = None,
     actor: str | None = None,
+    principal: str | None = None,
     bypass_approval: bool = False,
     key_override: str | None = None,
 ) -> Any:
@@ -76,38 +91,94 @@ def run(
     started = time.perf_counter()
     try:
         with rt.telemetry.span(tool.name, intent):
-            return _dispatch(
-                rt, tool, args, kwargs, intent, context, actor, bypass_approval, key_override
+            ticket = guarded(
+                prepare,
+                rt,
+                tool,
+                args,
+                kwargs,
+                intent=intent,
+                context=context,
+                actor=actor,
+                principal=principal,
+                bypass_approval=bypass_approval,
+                key_override=key_override,
             )
+            if isinstance(ticket, Replay):
+                return ticket.result
+
+            try:
+                result = ticket.tool.fn(**dict(ticket.call.args))
+            except Exception as exc:
+                mark_failed(rt, ticket, exc)
+                raise
+            settle(rt, ticket, result)
+            return result
     finally:
         rt.telemetry.duration(tool.name, time.perf_counter() - started)
 
 
-def _dispatch(
+async def run_async(
     rt: Runtime,
     tool: Tool,
-    args: tuple[Any, ...],
-    kwargs: Mapping[str, Any] | None,
+    args: tuple[Any, ...] = (),
+    kwargs: Mapping[str, Any] | None = None,
+    *,
     intent: str,
-    context: Mapping[str, Any] | None,
-    actor: str | None,
-    bypass_approval: bool,
-    key_override: str | None,
+    context: Mapping[str, Any] | None = None,
+    actor: str | None = None,
+    principal: str | None = None,
+    bypass_approval: bool = False,
+    key_override: str | None = None,
 ) -> Any:
+    """The same decision as :func:`run`, with the tool awaited instead of called.
+
+    Deciding is a handful of small queries against a synchronous store, so it runs in a
+    worker thread rather than blocking the loop. That also means a risk hook may do
+    blocking I/O without stalling anything, which is why hooks stay synchronous.
+    """
+    started = time.perf_counter()
     try:
-        return _run(
-            rt,
-            tool,
-            args,
-            dict(kwargs or {}),
-            intent=intent,
-            context=dict(context or {}),
-            actor=actor,
-            bypass_approval=bypass_approval,
-            key_override=key_override,
-        )
-    except _Passthrough as passthrough:
-        raise passthrough.cause from None
+        with rt.telemetry.span(tool.name, intent):
+            ticket = await asyncio.to_thread(
+                guarded,
+                prepare,
+                rt,
+                tool,
+                args,
+                kwargs,
+                intent=intent,
+                context=context,
+                actor=actor,
+                principal=principal,
+                bypass_approval=bypass_approval,
+                key_override=key_override,
+            )
+            if isinstance(ticket, Replay):
+                return ticket.result
+
+            try:
+                result = ticket.tool.fn(**dict(ticket.call.args))
+                if inspect.isawaitable(result):
+                    result = await result
+            except Exception as exc:
+                await asyncio.to_thread(mark_failed, rt, ticket, exc)
+                raise
+            await asyncio.to_thread(settle, rt, ticket, result)
+            return result
+    finally:
+        rt.telemetry.duration(tool.name, time.perf_counter() - started)
+
+
+def guarded(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Fail closed around the guardrail itself.
+
+    Only ever wraps the decision, never the tool. An error while deciding means the
+    decision is unknown, so nothing runs; an error inside the tool is the caller's to
+    see, unchanged.
+    """
+    try:
+        return fn(*args, **kwargs)
     except (Blocked, PendingApproval, DuplicateIntent):
         raise
     except StoreUnavailable as exc:
@@ -116,18 +187,25 @@ def _dispatch(
         raise Blocked(f"guardrail error: {exc}", layer=FAIL_CLOSED) from exc
 
 
-def _run(
+def prepare(
     rt: Runtime,
     tool: Tool,
-    raw_args: tuple[Any, ...],
-    raw_kwargs: dict[str, Any],
+    raw_args: tuple[Any, ...] = (),
+    raw_kwargs: Mapping[str, Any] | None = None,
     *,
     intent: str,
-    context: dict[str, Any],
-    actor: str | None,
-    bypass_approval: bool,
-    key_override: str | None,
-) -> Any:
+    context: Mapping[str, Any] | None = None,
+    actor: str | None = None,
+    principal: str | None = None,
+    bypass_approval: bool = False,
+    key_override: str | None = None,
+) -> Ticket | Replay:
+    """Every layer, then reserve and ledger. Returns a ticket, or the original result.
+
+    This is the whole decision. Sync and async callers share it exactly, so the two can
+    never drift into deciding differently.
+    """
+    context = dict(context or {})
     if not intent:
         raise _reject(
             rt,
@@ -137,21 +215,35 @@ def _run(
             {},
             tool_layer.LAYER,
             "every call needs an _intent naming the business action",
+            principal=principal,
         )
 
     try:
-        args = tool.validate(tool.bind(raw_args, raw_kwargs))
+        args = tool.validate(tool.bind(tuple(raw_args), dict(raw_kwargs or {})))
     except ValueError as exc:
-        raise _reject(rt, tool.name, intent, context, {}, tool_layer.LAYER, str(exc)) from exc
+        raise _reject(
+            rt, tool.name, intent, context, {}, tool_layer.LAYER, str(exc), principal=principal
+        ) from exc
 
     caps = rt.policy.caps_for(tool.name)
     scope_by = caps.scope_by if caps is not None and caps.scope_by else tool.scope_by
     try:
-        scope = caps_layer.resolve_scope(Call(tool.name, args, context, intent), scope_by)
+        scope = caps_layer.resolve_scope(
+            Call(tool.name, args, context, intent, principal=principal), scope_by
+        )
     except PolicyError as exc:
-        raise _reject(rt, tool.name, intent, context, args, caps_layer.LAYER, str(exc)) from exc
+        raise _reject(
+            rt, tool.name, intent, context, args, caps_layer.LAYER, str(exc), principal=principal
+        ) from exc
 
-    call = Call(tool=tool.name, args=args, context=context, intent=intent, scope=scope)
+    call = Call(
+        tool=tool.name,
+        args=args,
+        context=context,
+        intent=intent,
+        scope=scope,
+        principal=principal,
+    )
     key = key_override or idempotency.derive_key(tool.name, args, intent, context, tool.key_fields)
 
     rt.audit.record(
@@ -162,24 +254,19 @@ def _run(
         scope=scope,
         args=args,
         actor=actor,
+        principal=call.principal,
     )
 
     shadow = (tool.mode or rt.mode) is Mode.SHADOW
 
     if caps is not None:
         _enforce(
-            rt,
-            call,
-            key,
-            caps_layer.LAYER,
-            actor,
-            caps_layer.check(call, caps),
-            shadow=shadow,
+            rt, call, key, caps_layer.LAYER, actor, caps_layer.check(call, caps), shadow=shadow
         )
 
     existing = rt.store.get_reservation(key)
     if existing is not None:
-        return _resolve(rt, call, key, existing, actor)
+        return Replay(_resolve(rt, call, key, existing, actor))
 
     _enforce(
         rt,
@@ -195,10 +282,10 @@ def _run(
         verdict, ttl = approvals_layer.evaluate(call, rt.policy.rules_for(tool.name))
         _enforce(rt, call, key, approvals_layer.LAYER, actor, verdict, ttl=ttl, shadow=shadow)
 
-    return _commit(rt, tool, call, key, caps, actor, shadow=shadow)
+    return _claim(rt, tool, call, key, caps, actor, shadow=shadow)
 
 
-def _commit(
+def _claim(
     rt: Runtime,
     tool: Tool,
     call: Call,
@@ -206,7 +293,8 @@ def _commit(
     caps: Any,
     actor: str | None,
     shadow: bool = False,
-) -> Any:
+) -> Ticket | Replay:
+    """Take the reservation and charge the budget. After this the call may run once."""
     now = rt.clock()
     reservation = rt.store.reserve(key, call.tool, call.intent, now)
 
@@ -222,9 +310,10 @@ def _commit(
             "for this tool; refusing to treat this as a new action",
             key=key,
             scope=call.scope,
+            principal=call.principal,
         )
     if reservation.existing is not None:
-        return _resolve(rt, call, key, reservation.existing, actor)
+        return Replay(_resolve(rt, call, key, reservation.existing, actor))
 
     if caps is not None:
         violation = rt.store.commit_spend(
@@ -263,30 +352,51 @@ def _commit(
                     key=key,
                     scope=call.scope,
                     actor=actor,
+                    principal=call.principal,
                 )
 
-    try:
-        result = tool.fn(**dict(call.args))
-    except Exception as exc:
-        _mark_failed(rt, call, key, exc, actor)
-        raise _Passthrough(exc) from None
+    return Ticket(tool=tool, call=call, key=key, actor=actor)
 
+
+def settle(rt: Runtime, ticket: Ticket, result: Any) -> None:
+    """Record a call that ran. Deliberately not wrapped by :func:`guarded`.
+
+    The tool has already executed by this point, so reporting a store failure here as
+    Blocked would be a lie. The caller gets the store error, and the audit log shows an
+    intent with no outcome, which is exactly what happened.
+    """
     payload, replayable = idempotency.serialise(result)
-    try:
-        rt.store.complete(key, payload, replayable)
+    rt.store.complete(ticket.key, payload, replayable)
+    rt.audit.record(
+        tool=ticket.call.tool,
+        intent=ticket.call.intent,
+        key=ticket.key,
+        outcome=Outcome.EXECUTED,
+        scope=ticket.call.scope,
+        args=ticket.call.args,
+        result_ref=digest(payload)[:16] if replayable else None,
+        actor=ticket.actor,
+        principal=ticket.call.principal,
+    )
+
+
+def mark_failed(rt: Runtime, ticket: Ticket, exc: BaseException) -> None:
+    """Best effort. The reservation stays non-DONE either way, so retries stay blocked."""
+    reason = f"{type(exc).__name__}: {exc}"
+    with suppress(StoreUnavailable):
+        rt.store.fail(ticket.key, reason)
         rt.audit.record(
-            tool=call.tool,
-            intent=call.intent,
-            key=key,
-            outcome=Outcome.EXECUTED,
-            scope=call.scope,
-            args=call.args,
-            result_ref=digest(payload)[:16] if replayable else None,
-            actor=actor,
+            tool=ticket.call.tool,
+            intent=ticket.call.intent,
+            key=ticket.key,
+            outcome=Outcome.FAILED,
+            layer=idempotency.LAYER,
+            reason=reason,
+            scope=ticket.call.scope,
+            args=ticket.call.args,
+            actor=ticket.actor,
+            principal=ticket.call.principal,
         )
-    except StoreUnavailable as exc:
-        raise _Passthrough(exc) from None
-    return result
 
 
 def _resolve(rt: Runtime, call: Call, key: str, reservation: Reservation, actor: str | None) -> Any:
@@ -302,6 +412,7 @@ def _resolve(rt: Runtime, call: Call, key: str, reservation: Reservation, actor:
             idempotency.block_reason(reservation),
             key=key,
             scope=call.scope,
+            principal=call.principal,
         )
 
     try:
@@ -317,6 +428,7 @@ def _resolve(rt: Runtime, call: Call, key: str, reservation: Reservation, actor:
             exc.reason,
             key=key,
             scope=call.scope,
+            principal=call.principal,
         ) from None
 
     rt.audit.record(
@@ -329,6 +441,7 @@ def _resolve(rt: Runtime, call: Call, key: str, reservation: Reservation, actor:
         scope=call.scope,
         args=call.args,
         actor=actor,
+        principal=call.principal,
     )
     if rt.strict_idempotency:
         raise DuplicateIntent(call.intent, result)
@@ -373,6 +486,7 @@ def _enforce(
             args=call.args,
             result_ref=record.id,
             actor=actor,
+            principal=call.principal,
         )
         raise PendingApproval(record.id, decision.reason, call)
 
@@ -387,6 +501,7 @@ def _enforce(
         key=key,
         scope=call.scope,
         actor=actor,
+        principal=call.principal,
     )
 
 
@@ -412,6 +527,7 @@ def _observe(
         args=call.args,
         result_ref=rule or None,
         actor=actor,
+        principal=call.principal,
     )
 
 
@@ -427,6 +543,7 @@ def _reject(
     key: str = "",
     scope: str | None = None,
     actor: str | None = None,
+    principal: str | None = None,
 ) -> Blocked:
     rt.audit.record(
         tool=tool,
@@ -438,25 +555,6 @@ def _reject(
         scope=scope,
         args=args,
         actor=actor,
+        principal=principal,
     )
-    return Blocked(reason, layer=layer, call=Call(tool, args, context, intent, scope))
-
-
-def _mark_failed(rt: Runtime, call: Call, key: str, exc: BaseException, actor: str | None) -> None:
-    """Best effort. The reservation stays non-DONE either way, so retries stay blocked."""
-    reason = f"{type(exc).__name__}: {exc}"
-    try:
-        rt.store.fail(key, reason)
-        rt.audit.record(
-            tool=call.tool,
-            intent=call.intent,
-            key=key,
-            outcome=Outcome.FAILED,
-            layer=idempotency.LAYER,
-            reason=reason,
-            scope=call.scope,
-            args=call.args,
-            actor=actor,
-        )
-    except StoreUnavailable:
-        pass
+    return Blocked(reason, layer=layer, call=Call(tool, args, context, intent, scope, principal))

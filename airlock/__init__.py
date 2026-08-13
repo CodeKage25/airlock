@@ -4,6 +4,7 @@ from airlock import approval, errors
 from airlock.core.policy import Caps, Policy
 from airlock.core.risk import RiskHook
 from airlock.core.shadow import Mode
+from airlock.core.telemetry import Snapshot, Telemetry
 from airlock.core.types import ApprovalRecord, AuditEntry, Call, Decision, Outcome, Verdict
 from airlock.errors import (
     AirlockError,
@@ -15,7 +16,7 @@ from airlock.errors import (
 )
 from airlock.lock import Airlock
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "Airlock",
@@ -33,7 +34,9 @@ __all__ = [
     "Policy",
     "PolicyError",
     "RiskHook",
+    "Snapshot",
     "StoreUnavailable",
+    "Telemetry",
     "Verdict",
     "approval",
     "errors",

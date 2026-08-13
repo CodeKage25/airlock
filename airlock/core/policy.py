@@ -90,10 +90,21 @@ class Policy:
         return [rule for rule in self.approvals if rule.tool == tool]
 
 
+PRINCIPAL = "principal"
+
+
 def resolve_scope(call: Call, scope_by: str | None) -> str | None:
-    """Partition key for this call, or None when the tool is unscoped."""
+    """Partition key for this call, or None when the tool is unscoped.
+
+    ``scope_by="principal"`` partitions by who is acting, which is how a support bot and
+    a treasury bot stop sharing one budget.
+    """
     if scope_by is None:
         return None
+    if scope_by == PRINCIPAL:
+        if not call.principal:
+            raise PolicyError("caps are partitioned by principal but this call has no _principal")
+        return call.principal
     if scope_by not in call.context:
         raise PolicyError(f"scope key {scope_by!r} missing from context")
     return str(call.context[scope_by])

@@ -201,16 +201,34 @@ _POSTGRES_TRUNCATE_GUARD = (
     """,
 )
 
+_SQLITE_IDENTITY = (
+    "ALTER TABLE audit ADD COLUMN principal TEXT",
+    "ALTER TABLE audit ADD COLUMN prev_hash TEXT",
+    "ALTER TABLE audit ADD COLUMN entry_hash TEXT",
+    "ALTER TABLE approvals ADD COLUMN principal TEXT",
+    "CREATE INDEX IF NOT EXISTS audit_by_principal ON audit (principal, at)",
+)
+
+_POSTGRES_IDENTITY = (
+    "ALTER TABLE audit ADD COLUMN IF NOT EXISTS principal TEXT",
+    "ALTER TABLE audit ADD COLUMN IF NOT EXISTS prev_hash TEXT",
+    "ALTER TABLE audit ADD COLUMN IF NOT EXISTS entry_hash TEXT",
+    "ALTER TABLE approvals ADD COLUMN IF NOT EXISTS principal TEXT",
+    "CREATE INDEX IF NOT EXISTS audit_by_principal ON audit (principal, at)",
+)
+
 MIGRATIONS: dict[str, tuple[Migration, ...]] = {
     SQLITE: (
         Migration(1, "initial schema", _SQLITE_INITIAL),
         Migration(2, "leases and approval expiry", _SQLITE_OPERATIONS),
         Migration(3, "audit truncate guard", ()),
+        Migration(4, "agent identity and audit chaining", _SQLITE_IDENTITY),
     ),
     POSTGRES: (
         Migration(1, "initial schema", _POSTGRES_INITIAL),
         Migration(2, "leases and approval expiry", _POSTGRES_OPERATIONS),
         Migration(3, "audit truncate guard", _POSTGRES_TRUNCATE_GUARD),
+        Migration(4, "agent identity and audit chaining", _POSTGRES_IDENTITY),
     ),
 }
 
