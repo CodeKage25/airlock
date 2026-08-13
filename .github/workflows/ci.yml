@@ -74,7 +74,7 @@ jobs:
             grep -E "^SKIPPED" pytest.log || true
             exit 1
           fi
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v7
         if: matrix.python == '3.12'
         with:
           files: coverage.xml
