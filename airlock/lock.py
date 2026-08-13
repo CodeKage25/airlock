@@ -12,6 +12,7 @@ from airlock.core.audit import AuditLog
 from airlock.core.intents import DEFAULT_STUCK_AFTER, Intents
 from airlock.core.pipeline import Runtime
 from airlock.core.policy import Policy
+from airlock.core.shadow import Mode, Shadow
 from airlock.core.stores import Store, from_url
 from airlock.core.tools import Registry, Tool
 from airlock.core.types import ApprovalRecord
@@ -35,10 +36,12 @@ class Airlock:
         strict_idempotency: bool = False,
         approval_ttl: timedelta | None = None,
         stuck_after: timedelta = DEFAULT_STUCK_AFTER,
+        mode: Mode | str = Mode.ENFORCE,
     ) -> None:
         if fail_mode != "closed":
             raise PolicyError("fail_mode is always 'closed'; there is no fail-open mode")
 
+        self.mode = Mode(mode)
         self.policy = policy or Policy()
         self.store: Store = from_url(store) if isinstance(store, str) else store
         self.clock = clock or _utcnow
@@ -47,6 +50,7 @@ class Airlock:
             self.store, self.clock, self._run_approved, self.audit, approval_ttl
         )
         self.intents = Intents(self.store, self.clock, self.audit, stuck_after)
+        self.shadow = Shadow(self.audit)
         self.registry = Registry()
         self._wrapped: dict[str, Callable[..., Any]] = {}
         self._runtime = Runtime(
@@ -57,6 +61,7 @@ class Airlock:
             approvals=self.approvals,
             strict_idempotency=strict_idempotency,
             approval_ttl=approval_ttl,
+            mode=self.mode,
         )
 
     def tool(
@@ -66,12 +71,21 @@ class Airlock:
         name: str | None = None,
         scope_by: str | None = None,
         key_fields: Iterable[str] = (),
+        mode: Mode | str | None = None,
     ) -> Any:
-        """Register a function. Usable bare (``@lock.tool``) or called with options."""
+        """Register a function. Usable bare (``@lock.tool``) or called with options.
+
+        ``mode`` overrides the lock's mode for this tool alone, which is how a policy
+        graduates: one tool enforces while the rest are still being observed.
+        """
 
         def decorate(target: Callable[..., Any]) -> Callable[..., Any]:
             registered = tool_layer.build(
-                target, name=name, scope_by=scope_by, key_fields=tuple(key_fields)
+                target,
+                name=name,
+                scope_by=scope_by,
+                key_fields=tuple(key_fields),
+                mode=Mode(mode) if mode is not None else None,
             )
             self.registry.add(registered)
             wrapped = self._wrap(registered)
@@ -150,4 +164,4 @@ class Airlock:
         self.store.close()
 
     def __repr__(self) -> str:
-        return f"<Airlock tools={len(self.registry)} store={self.store.url}>"
+        return f"<Airlock mode={self.mode.value} tools={len(self.registry)} store={self.store.url}>"

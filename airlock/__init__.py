@@ -3,6 +3,7 @@
 from airlock import approval, errors
 from airlock.core.policy import Caps, Policy
 from airlock.core.risk import RiskHook
+from airlock.core.shadow import Mode
 from airlock.core.types import ApprovalRecord, AuditEntry, Call, Decision, Outcome, Verdict
 from airlock.errors import (
     AirlockError,
@@ -14,7 +15,7 @@ from airlock.errors import (
 )
 from airlock.lock import Airlock
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "Airlock",
@@ -26,6 +27,7 @@ __all__ = [
     "Caps",
     "Decision",
     "DuplicateIntent",
+    "Mode",
     "Outcome",
     "PendingApproval",
     "Policy",

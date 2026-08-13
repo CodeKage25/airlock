@@ -16,7 +16,6 @@ from airlock.errors import PolicyError
 if TYPE_CHECKING:
     from airlock.core.approvals import ApprovalRule
     from airlock.core.risk import RiskHook
-    from airlock.core.stores.base import Store
 
 LAYER = "caps"
 
@@ -119,39 +118,33 @@ def violation_reason(tool: str, scope: str | None, violation: SpendViolation) ->
     )
 
 
-def check(call: Call, caps: Caps, store: Store, now: datetime, key: str) -> Decision:
-    """Layer 2. Window totals exclude ``key`` so a retry is never charged twice.
+def check(call: Call, caps: Caps) -> Decision:
+    """Layer 2: the rules that depend only on this one call.
 
-    This is the advisory read that produces a good audit reason. The binding check
-    happens inside the store transaction that writes the spend, so two concurrent
-    calls cannot both pass an under-limit read.
+    Window limits are deliberately *not* checked here. They are enforced inside the same
+    store transaction that writes the spend, because a read here and a write there can be
+    raced by a second caller. Checking them in both places would also make every call pay
+    for a redundant query, and would report each breach twice under shadow mode.
     """
     if caps.currency is not None:
         currency = call.args.get("currency")
         if currency is not None and str(currency) != caps.currency:
             return Decision.block(
-                f"currency {currency!r} is outside the {caps.currency} cap for {call.tool}"
+                f"currency {currency!r} is outside the {caps.currency} cap for {call.tool}",
+                rule="currency",
             )
 
     try:
         amount = meter(call, caps)
     except ValueError as exc:
-        return Decision.block(f"uncappable amount: {exc}")
+        return Decision.block(f"uncappable amount: {exc}", rule="uncappable_amount")
     if amount < 0:
-        return Decision.block(f"negative amount {amount} is not spendable")
+        return Decision.block(f"negative amount {amount} is not spendable", rule="negative_amount")
 
     if caps.max_per_call is not None and amount > caps.max_per_call:
         return Decision.block(
-            f"{amount} exceeds max_per_call of {caps.max_per_call} for {call.tool}"
+            f"{amount} exceeds max_per_call of {caps.max_per_call} for {call.tool}",
+            rule=f"max_per_call:{caps.max_per_call}",
         )
-
-    for name, span, limit in caps.windows():
-        spent = store.spend_since(call.tool, call.scope, now - span, exclude_key=key)
-        if spent + amount > limit:
-            where = f" in scope {call.scope!r}" if call.scope else ""
-            return Decision.block(
-                f"{amount} would take {call.tool}{where} to {spent + amount}, "
-                f"over the {name} of {limit}"
-            )
 
     return Decision.allow()

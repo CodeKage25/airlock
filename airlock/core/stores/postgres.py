@@ -50,7 +50,9 @@ class PostgresStore(Store):
                 min_size=min_size,
                 max_size=max_size,
                 open=True,
-                kwargs={"row_factory": dict_row},
+                # Without this, timestamps come back in the server's local zone while the
+                # other backends return UTC, and the same log reads differently per store.
+                kwargs={"row_factory": dict_row, "options": "-c timezone=UTC"},
             )
             self._pool.wait(timeout=10)
         except Exception as exc:
@@ -167,12 +169,14 @@ class PostgresStore(Store):
         amount: Decimal,
         at: datetime,
         checks: Sequence[SpendCheck],
+        enforce: bool = True,
     ) -> SpendViolation | None:
         with self._tx() as cur:
             cur.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"airlock:spend:{tool}:{scope or ''}",),
             )
+            violation = None
             for check in checks:
                 cur.execute(
                     "SELECT COALESCE(SUM(amount), 0) AS total FROM spend "
@@ -182,13 +186,16 @@ class PostgresStore(Store):
                 )
                 total = Decimal((cur.fetchone() or {}).get("total") or 0) + amount
                 if total > check.limit:
-                    return SpendViolation(check.name, check.limit, total)
+                    violation = SpendViolation(check.name, check.limit, total)
+                    break
+            if violation is not None and enforce:
+                return violation
             cur.execute(
                 "INSERT INTO spend (key, tool, scope, amount, at) VALUES (%s, %s, %s, %s, %s) "
                 "ON CONFLICT (key) DO NOTHING",
                 (key, tool, scope, amount, at),
             )
-        return None
+        return violation
 
     def spend_since(
         self, tool: str, scope: str | None, since: datetime, exclude_key: str

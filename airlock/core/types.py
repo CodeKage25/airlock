@@ -16,22 +16,29 @@ class Verdict(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    """What a layer or risk hook concluded."""
+    """What a layer or risk hook concluded.
+
+    ``reason`` is for a human and names the specific call, so it carries amounts and
+    running totals. ``rule`` names the thing that fired and stays identical across every
+    call it fires on, which is what lets a shadow report group a thousand breaches of one
+    limit into one line instead of a thousand.
+    """
 
     verdict: Verdict
     reason: str = ""
+    rule: str = ""
 
     @classmethod
     def allow(cls, reason: str = "") -> Decision:
         return cls(Verdict.ALLOW, reason)
 
     @classmethod
-    def block(cls, reason: str) -> Decision:
-        return cls(Verdict.BLOCK, reason)
+    def block(cls, reason: str, rule: str = "") -> Decision:
+        return cls(Verdict.BLOCK, reason, rule)
 
     @classmethod
-    def escalate(cls, reason: str) -> Decision:
-        return cls(Verdict.ESCALATE, reason)
+    def escalate(cls, reason: str, rule: str = "") -> Decision:
+        return cls(Verdict.ESCALATE, reason, rule)
 
     @property
     def allowed(self) -> bool:
@@ -64,6 +71,8 @@ class Outcome(StrEnum):
     FAILED = "failed"
     EXPIRED = "expired"
     RESOLVED = "resolved"
+    WOULD_BLOCK = "would_block"
+    WOULD_ESCALATE = "would_escalate"
 
 
 @dataclass(frozen=True, slots=True)

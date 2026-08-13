@@ -486,5 +486,5 @@ def _fail_closed_case(name: str, failing: str) -> None:
             )
 
 
-for _target in ("append_audit", "get_reservation", "reserve", "spend_since", "commit_spend"):
+for _target in ("append_audit", "get_reservation", "reserve", "commit_spend"):
     _fail_closed_case(_target, _target)

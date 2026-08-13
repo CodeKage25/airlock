@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
+from airlock.core.shadow import Mode
 from airlock.errors import PolicyError
 
 LAYER = "tool"
@@ -25,6 +26,7 @@ class Tool:
     description: str = ""
     scope_by: str | None = None
     key_fields: tuple[str, ...] = ()
+    mode: Mode | None = None
 
     def bind(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> dict[str, Any]:
         """Positional and keyword arguments as one fully defaulted mapping."""
@@ -78,6 +80,7 @@ def build(
     name: str | None = None,
     scope_by: str | None = None,
     key_fields: tuple[str, ...] = (),
+    mode: Mode | None = None,
 ) -> Tool:
     signature = inspect.signature(fn)
     tool_name = name or fn.__name__
@@ -99,6 +102,7 @@ def build(
         description=inspect.getdoc(fn) or "",
         scope_by=scope_by,
         key_fields=tuple(key_fields),
+        mode=mode,
     )
 
 

@@ -14,6 +14,7 @@ from airlock.core.approvals import Approvals
 from airlock.core.audit import AuditLog
 from airlock.core.canonical import digest
 from airlock.core.policy import Policy
+from airlock.core.shadow import Mode
 from airlock.core.stores.base import Store
 from airlock.core.tools import Tool
 from airlock.core.types import Call, Decision, Outcome, Reservation, ReservationState, Verdict
@@ -53,6 +54,7 @@ class Runtime:
     approvals: Approvals
     strict_idempotency: bool = False
     approval_ttl: timedelta | None = None
+    mode: Mode = Mode.ENFORCE
 
 
 def run(
@@ -138,6 +140,8 @@ def _run(
         actor=actor,
     )
 
+    shadow = (tool.mode or rt.mode) is Mode.SHADOW
+
     if caps is not None:
         _enforce(
             rt,
@@ -145,7 +149,8 @@ def _run(
             key,
             caps_layer.LAYER,
             actor,
-            caps_layer.check(call, caps, rt.store, rt.clock(), key),
+            caps_layer.check(call, caps),
+            shadow=shadow,
         )
 
     existing = rt.store.get_reservation(key)
@@ -153,17 +158,31 @@ def _run(
         return _resolve(rt, call, key, existing, actor)
 
     _enforce(
-        rt, call, key, risk_layer.LAYER, actor, risk_layer.evaluate(call, rt.policy.risk_hooks)
+        rt,
+        call,
+        key,
+        risk_layer.LAYER,
+        actor,
+        risk_layer.evaluate(call, rt.policy.risk_hooks),
+        shadow=shadow,
     )
 
     if not bypass_approval:
         verdict, ttl = approvals_layer.evaluate(call, rt.policy.rules_for(tool.name))
-        _enforce(rt, call, key, approvals_layer.LAYER, actor, verdict, ttl=ttl)
+        _enforce(rt, call, key, approvals_layer.LAYER, actor, verdict, ttl=ttl, shadow=shadow)
 
-    return _commit(rt, tool, call, key, caps, actor)
+    return _commit(rt, tool, call, key, caps, actor, shadow=shadow)
 
 
-def _commit(rt: Runtime, tool: Tool, call: Call, key: str, caps: Any, actor: str | None) -> Any:
+def _commit(
+    rt: Runtime,
+    tool: Tool,
+    call: Call,
+    key: str,
+    caps: Any,
+    actor: str | None,
+    shadow: bool = False,
+) -> Any:
     now = rt.clock()
     reservation = rt.store.reserve(key, call.tool, call.intent, now)
 
@@ -191,22 +210,36 @@ def _commit(rt: Runtime, tool: Tool, call: Call, key: str, caps: Any, actor: str
             caps_layer.meter(call, caps),
             now,
             caps_layer.spend_checks(caps, now),
+            enforce=not shadow,
         )
         if violation is not None:
-            # Nothing ran, so the intent must not be left poisoned for a later retry.
-            rt.store.discard(key)
-            raise _reject(
-                rt,
-                call.tool,
-                call.intent,
-                call.context,
-                call.args,
-                caps_layer.LAYER,
-                caps_layer.violation_reason(call.tool, call.scope, violation),
-                key=key,
-                scope=call.scope,
-                actor=actor,
-            )
+            reason = caps_layer.violation_reason(call.tool, call.scope, violation)
+            if shadow:
+                _observe(
+                    rt,
+                    call,
+                    key,
+                    caps_layer.LAYER,
+                    actor,
+                    Outcome.WOULD_BLOCK,
+                    reason,
+                    rule=violation.name,
+                )
+            else:
+                # Nothing ran, so the intent must not be left poisoned for a later retry.
+                rt.store.discard(key)
+                raise _reject(
+                    rt,
+                    call.tool,
+                    call.intent,
+                    call.context,
+                    call.args,
+                    caps_layer.LAYER,
+                    reason,
+                    key=key,
+                    scope=call.scope,
+                    actor=actor,
+                )
 
     try:
         result = tool.fn(**dict(call.args))
@@ -286,8 +319,21 @@ def _enforce(
     actor: str | None,
     decision: Decision,
     ttl: timedelta | None = None,
+    shadow: bool = False,
 ) -> None:
     if decision.allowed:
+        return
+
+    if shadow:
+        _observe(
+            rt,
+            call,
+            key,
+            layer,
+            actor,
+            Outcome.WOULD_ESCALATE if decision.verdict is Verdict.ESCALATE else Outcome.WOULD_BLOCK,
+            decision.reason,
+        )
         return
 
     if decision.verdict is Verdict.ESCALATE:
@@ -316,6 +362,31 @@ def _enforce(
         decision.reason,
         key=key,
         scope=call.scope,
+        actor=actor,
+    )
+
+
+def _observe(
+    rt: Runtime,
+    call: Call,
+    key: str,
+    layer: str,
+    actor: str | None,
+    outcome: Outcome,
+    reason: str,
+    rule: str = "",
+) -> None:
+    """Record a verdict without applying it. Shadow mode's only effect."""
+    rt.audit.record(
+        tool=call.tool,
+        intent=call.intent,
+        key=key,
+        outcome=outcome,
+        layer=layer,
+        reason=reason,
+        scope=call.scope,
+        args=call.args,
+        result_ref=rule or None,
         actor=actor,
     )
 

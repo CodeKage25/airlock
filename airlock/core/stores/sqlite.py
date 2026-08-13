@@ -204,8 +204,10 @@ class SqliteStore(Store):
         amount: Decimal,
         at: datetime,
         checks: Sequence[SpendCheck],
+        enforce: bool = True,
     ) -> SpendViolation | None:
         with self._tx() as conn:
+            violation = None
             for check in checks:
                 rows = conn.execute(
                     "SELECT amount FROM spend "
@@ -214,13 +216,16 @@ class SqliteStore(Store):
                 ).fetchall()
                 total = sum((Decimal(row["amount"]) for row in rows), Decimal(0)) + amount
                 if total > check.limit:
-                    return SpendViolation(check.name, check.limit, total)
+                    violation = SpendViolation(check.name, check.limit, total)
+                    break
+            if violation is not None and enforce:
+                return violation
             conn.execute(
                 "INSERT INTO spend (key, tool, scope, amount, at) VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT (key) DO NOTHING",
                 (key, tool, scope, str(amount), _ts(at)),
             )
-        return None
+        return violation
 
     def spend_since(
         self, tool: str, scope: str | None, since: datetime, exclude_key: str

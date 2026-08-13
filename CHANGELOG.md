@@ -9,6 +9,42 @@ affects.
 
 ## [Unreleased]
 
+## [0.3.0]
+
+Adoptable without a big-bang cutover.
+
+### Added
+
+- **Shadow mode.** `Airlock(mode="shadow")` evaluates every layer and audits every verdict
+  without blocking anything, so a policy can be soaked against production traffic before it
+  enforces. `lock.shadow.report()` and `airlock shadow report` group what enforcing would
+  have changed, by rule, with counts and example intents. `--strict` exits non-zero when
+  anything would still be stopped, so a promotion can be gated in CI.
+- **Per-tool graduation.** `@lock.tool(mode="enforce")` overrides the lock's mode for one
+  tool, so a policy goes live one action at a time rather than all at once.
+- `Decision` gained a `rule` field: a stable identity for the thing that fired, separate
+  from the human-readable reason that names amounts and running totals. Without it a
+  thousand breaches of one limit report as a thousand separate findings.
+
+### Fixed
+
+- **Postgres returned audit timestamps in the server's local timezone** while the other
+  backends returned UTC, so the same log read differently depending on the store. The pool
+  now pins the session to UTC. *Affects: reading the audit log, not any guarantee.*
+
+### Changed
+
+- **Window limits are no longer checked at layer 2.** They were being evaluated twice: once
+  as an advisory read and again as the binding check inside the transaction that writes the
+  spend. The advisory read cost a query per call, could never be authoritative anyway, and
+  made shadow mode report every window breach twice. Layer 2 now covers only the rules that
+  depend on the single call in front of it — `max_per_call`, currency, negative amounts —
+  and windows are enforced solely where the spend is written. *No behaviour change when
+  enforcing; a window breach is still blocked, with the same reason.*
+- `Store.commit_spend` gained `enforce`. With `enforce=False` the spend is recorded whatever
+  the checks say and the violation is returned for reporting, which is what lets shadow mode
+  keep its windows truthful. *`airlock.core` is internal; see the stability policy.*
+
 ## [0.2.0]
 
 Deployable across replicas, and recoverable when a call goes missing.
@@ -85,6 +121,7 @@ First release. The five layers, and the promises they make.
 - **A 31-case adversarial benchmark** with two hard invariants: zero duplicate executions and
   zero fail-closed violations.
 
-[Unreleased]: https://github.com/CodeKage25/airlock/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/CodeKage25/airlock/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/CodeKage25/airlock/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/CodeKage25/airlock/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CodeKage25/airlock/releases/tag/v0.1.0

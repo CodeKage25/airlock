@@ -92,11 +92,17 @@ class Store(ABC):
         amount: Decimal,
         at: datetime,
         checks: Sequence[SpendCheck],
+        enforce: bool = True,
     ) -> SpendViolation | None:
         """Re-check every window and write the spend in one atomic step.
 
         Checking and writing separately lets two concurrent calls both read an
         under-limit total and both commit, so the limit has to be enforced here.
+
+        With ``enforce=False`` the spend is recorded whatever the checks say, and any
+        violation is returned for reporting only. Shadow mode needs that: a call it
+        allows through really did spend the money, and a ledger that pretends otherwise
+        would under-report every window that follows.
         """
 
     @abstractmethod

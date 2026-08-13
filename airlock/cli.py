@@ -153,6 +153,14 @@ def audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def shadow_report(args: argparse.Namespace) -> int:
+    lock = _bare(args)
+    report = lock.shadow.report(tool=args.tool)
+    print(report.render())
+    # Non-zero when enforcing would change something, so this can gate a promotion.
+    return 1 if (args.strict and not report.clean) else 0
+
+
 def migrate(args: argparse.Namespace) -> int:
     from airlock.core.stores import migrations
 
@@ -199,6 +207,15 @@ def build_parser() -> argparse.ArgumentParser:
     reject.add_argument("id")
     reject.add_argument("--reason", required=True)
     reject.set_defaults(handler=approvals_reject)
+
+    shadow = commands.add_parser("shadow", help="what observe-only mode would have stopped")
+    shadow_sub = shadow.add_subparsers(dest="subcommand", required=True)
+    shadow_rep = shadow_sub.add_parser("report", help="what enforcing would have changed")
+    shadow_rep.add_argument("--tool")
+    shadow_rep.add_argument(
+        "--strict", action="store_true", help="exit non-zero if anything would be stopped"
+    )
+    shadow_rep.set_defaults(handler=shadow_report)
 
     log = commands.add_parser("audit", help="query the audit log")
     log.add_argument("--tool")

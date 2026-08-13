@@ -15,7 +15,7 @@ def locked(store_url: str, clock: Clock, *failing: str, **policy: object):  # ty
 
 @pytest.mark.parametrize(
     "failing",
-    ["append_audit", "get_reservation", "reserve", "spend_since", "commit_spend"],
+    ["append_audit", "get_reservation", "reserve", "commit_spend"],
 )
 def test_nothing_executes_while_a_dependency_is_down(
     store_url: str, clock: Clock, calls: list[float], failing: str

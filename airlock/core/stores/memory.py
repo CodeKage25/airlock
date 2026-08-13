@@ -116,14 +116,19 @@ class MemoryStore(Store):
         amount: Decimal,
         at: datetime,
         checks: Sequence[SpendCheck],
+        enforce: bool = True,
     ) -> SpendViolation | None:
         with self._lock:
+            violation = None
             for check in checks:
                 total = self.spend_since(tool, scope, check.since, exclude_key=key) + amount
                 if total > check.limit:
-                    return SpendViolation(check.name, check.limit, total)
+                    violation = SpendViolation(check.name, check.limit, total)
+                    break
+            if violation is not None and enforce:
+                return violation
             self._spend.setdefault(key, (tool, scope, amount, at))
-            return None
+            return violation
 
     def spend_since(
         self, tool: str, scope: str | None, since: datetime, exclude_key: str

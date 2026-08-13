@@ -32,6 +32,7 @@ pip install agent-airlock
 - [Example: a payment agent that can't hurt you](#example-a-payment-agent-that-cant-hurt-you)
 - [Production readiness](#production-readiness)
 - [The benchmark](#the-benchmark)
+- [Adopting it without a scary cutover](#adopting-it-without-a-scary-cutover)
 - [Operating it](#operating-it)
 - [Architecture and repo layout](#architecture-and-repo-layout)
 - [What Airlock protects against, and what it doesn't](#what-airlock-protects-against-and-what-it-doesnt)
@@ -186,6 +187,7 @@ Airlock(
     strict_idempotency: bool = False, # raise DuplicateIntent instead of replaying
     approval_ttl: timedelta | None = None,   # default deadline for parked requests
     stuck_after: timedelta = timedelta(minutes=5),   # when a pending call counts as stuck
+    mode: str = "enforce",            # "shadow" evaluates and records without blocking
 )
 ```
 
@@ -200,6 +202,7 @@ Airlock(
 | `lock.audit.query(...)` | Query the audit log (by tool, decision, time range, intent) |
 | `lock.intents.stuck()` | Intents whose real-world effect is unknown and are blocking retries |
 | `lock.intents.resolve(...)` | Settle one, as executed or not executed |
+| `lock.shadow.report()` | In observe-only mode, what enforcing would have changed |
 | `lock.check_policy()` | Raise if a cap or rule names a tool that was never registered |
 
 ### `Policy` and `Caps`
@@ -284,6 +287,57 @@ Pass per-call context through the reserved keyword `_context`. It feeds approval
 @lock.tool(scope_by="corridor", key_fields=["corridor"])
 def send_payment(to: str, amount: float) -> str: ...
 ```
+
+## Adopting it without a scary cutover
+
+Nobody switches a blocking guardrail on in a payment path on day one. Run it in observe-only
+first:
+
+```python
+lock = Airlock(policy=policy, store="postgresql://...", mode="shadow")
+```
+
+Every layer still evaluates, every verdict is still audited, and nothing is blocked. After a
+fortnight, read what enforcing would have done:
+
+```bash
+$ airlock shadow report
+8 calls observed. Enforcing would have stopped 8 of them, on 12 verdicts (10 blocked, 2 sent to a human).
+
+      6   75.0%  block    send_payment [caps]
+         120.0 exceeds max_per_call of 100 for send_payment
+         e.g. inv-0, inv-1, inv-2, inv-3, inv-4
+
+      2   25.0%  escalate send_payment [approvals]
+         first payment to a new beneficiary
+         e.g. new-0, new-1
+```
+
+Tune the policy until only the calls you actually want stopped appear, then graduate one tool
+at a time:
+
+```python
+@lock.tool(mode="enforce")  # this one is live; the rest are still being observed
+def send_payment(to: str, amount: float) -> str: ...
+```
+
+`airlock shadow report --strict` exits non-zero when anything would still be stopped, so a
+promotion can be gated on it in CI.
+
+**Shadow mode relaxes judgement, never correctness.** Caps, risk hooks and the approval gate
+are opinions about what should be allowed, so they can be observed instead of applied. Three
+things are not opinions and are never shadowed:
+
+- **The tool layer.** Arguments that fail validation cannot be passed to the function at all,
+  so there is nothing to observe.
+- **Idempotency.** Letting a duplicate through during a soak period would cause exactly the
+  double payment this library exists to prevent, at the moment everyone believed nothing was
+  at risk.
+- **Fail-closed.** An unreachable store means idempotency cannot be checked, and that check
+  is not optional in either mode.
+
+Spend is still ledgered for calls shadow mode allows through, because they really did spend
+the money and a window that pretended otherwise would under-report every breach after it.
 
 ## Operating it
 
@@ -430,9 +484,11 @@ adversarial benchmark. `mypy` is strict over `core/`.
 
 - **Redaction is shallow.** `audit_redact` matches top-level argument names only; a secret
   nested inside a dict argument still reaches the log.
-- **Sync only.** Tools and risk hooks are synchronous. Async support is v0.3.
-- **Policy is Python.** No YAML policy files and no dry-run/shadow mode yet, so adoption is
-  a cutover rather than a soak period. Both are the next thing being built.
+- **Sync only.** Tools and risk hooks are synchronous. Async support is next.
+- **Policy is Python.** No YAML policy files yet, so a policy change is a deploy and cannot
+  be reviewed by anyone who does not write Python.
+- **No metrics.** Everything is queryable from the audit log, but there is no OpenTelemetry
+  or Prometheus output yet.
 - **Audit and spend grow forever.** No retention, rollup or archival yet.
 - **`TRUNCATE` protection needs role separation.** The triggers stop the application from
   rewriting history; they do not stop the table's owner from dropping the triggers. Grant
@@ -518,9 +574,9 @@ Python 3.11+. Core dependencies: pydantic and the standard library. Postgres, re
 - [x] **v0.1** core layers (tools, caps, idempotency, approvals via Python API), SQLite audit log, OpenAI and Anthropic adapters, benchmark green
 - [x] **v0.2** Postgres store, schema migrations, stuck-intent recovery, approval TTLs,
       operator CLI
-- [ ] **v0.3** shadow mode, OpenTelemetry and Prometheus, async tools, agent identity,
-      policy as data
-- [ ] **v0.4** MCP server, LangChain/LangGraph adapter, Slack approval channel
+- [x] **v0.3** shadow mode with a graduation path per tool
+- [ ] **v0.4** OpenTelemetry and Prometheus, async tools, agent identity, policy as data
+- [ ] **v0.5** MCP server, LangChain/LangGraph adapter, Slack approval channel
 - [ ] **Later** hash-chained audit, audit export and retention, anomaly-detection risk hook
 
 Full detail and reasoning: [`ROADMAP.md`](ROADMAP.md).

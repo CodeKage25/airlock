@@ -102,6 +102,21 @@ $ airlock audit --outcome blocked --limit 20
 **Never raise a cap to unblock an incident before you know which of the two cases you are
 in.** If the model is wrong, raising the cap removes the only thing that caught it.
 
+## Turning enforcement on
+
+Run `mode="shadow"` for a couple of weeks first. Then:
+
+```bash
+$ airlock shadow report --tool send_payment
+```
+
+Read every line. For each one, decide whether you want that call stopped in production. If
+you do not, the policy is wrong, not the traffic. Tune it, wait for the report to settle,
+then graduate that one tool with `@lock.tool(mode="enforce")` and leave the rest observing.
+
+Graduating everything at once is how a guardrail gets switched back off after its first
+incident. Do one action class at a time, starting with the smallest and most reversible.
+
 ## Deploying
 
 **More than one host requires Postgres.** SQLite is safe for any number of processes on one

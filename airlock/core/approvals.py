@@ -58,9 +58,15 @@ def evaluate(call: Call, rules: Sequence[ApprovalRule]) -> tuple[Decision, timed
         try:
             matched = bool(rule.predicate(call))
         except Exception as exc:
-            return Decision.block(f"approval rule for {rule.tool!r} raised: {exc}"), None
+            return (
+                Decision.block(
+                    f"approval rule for {rule.tool!r} raised: {exc}",
+                    rule=f"raised:{rule.tool}",
+                ),
+                None,
+            )
         if matched:
-            return Decision.escalate(rule.describe()), rule.ttl
+            return Decision.escalate(rule.describe(), rule=rule.describe()), rule.ttl
     return Decision.allow(), None
 
 

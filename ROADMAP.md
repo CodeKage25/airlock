@@ -62,7 +62,7 @@ A queue with no expiry rots, and someone eventually approves a three-week-old pa
 
 These decide whether a company will *choose* it.
 
-### 5. Shadow mode
+### 5. Shadow mode  ✅ shipped in v0.3
 
 The most important item on this list for real adoption. Nobody switches on a blocking
 guardrail in a payment path on day one. They run it in observe-only for two weeks, read what
@@ -181,7 +181,7 @@ The real differentiator in regulated industries.
 
 1. ~~**P0** — it can be deployed~~ ✅ v0.2
 2. **P2 trust surface** — cheap, and it is what an evaluator sees first
-3. **Shadow mode and observability** — it can be adopted without a scary cutover
+3. ~~**Shadow mode**~~ ✅ v0.3, and observability — it can be adopted without a scary cutover
 4. **Async, MCP, identity** — it can be adopted by more than Python shops
 5. **Compliance and hardening** — it can be adopted by the industries that need it most
 
